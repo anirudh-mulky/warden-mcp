@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# secrets — never commit these
+.env
+.env.local
+*.pem
+
+# tooling
+coverage/
+.DS_Store
+*.log
+
+# terraform (Day 8)
+.terraform/
+*.tfstate
+*.tfstate.*

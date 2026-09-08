@@ -1,0 +1,57 @@
+/**
+ * Domain types shared by the gateway and the dashboard.
+ *
+ * Nothing in this package may import from Node, Express, React or any
+ * database driver. It is pure vocabulary: the words both sides of the
+ * system agree to use. Keeping it dependency-free is what lets the
+ * browser bundle import it without dragging the server in.
+ */
+
+/** What the gateway decided to do with a single tool call. */
+export type Verdict = "allow" | "deny" | "throttle" | "error";
+
+/** Stable identifiers. Branded so a TenantId can never be passed where an ApiKeyId belongs. */
+export type TenantId = string & { readonly __brand: "TenantId" };
+export type ApiKeyId = string & { readonly __brand: "ApiKeyId" };
+
+/** An upstream MCP server that Warden proxies to. */
+export interface UpstreamServer {
+  id: string;
+  tenantId: TenantId;
+  /** Prefix applied to this server's tools, e.g. "github" -> "github.create_issue". */
+  namespace: string;
+  /** Where the real MCP server lives. */
+  url: string;
+  enabled: boolean;
+}
+
+/**
+ * One line in the audit log: everything we know about a single tools/call.
+ * This is the object the dashboard renders, so its shape is a contract.
+ */
+export interface ToolCallRecord {
+  id: string;
+  tenantId: TenantId;
+  apiKeyId: ApiKeyId;
+  /** Namespaced tool name as the agent asked for it, e.g. "fs.write_file". */
+  tool: string;
+  /** Which upstream it was routed to, or null if we denied it before routing. */
+  upstreamId: string | null;
+  /** SHA-256 of the arguments. We store the fingerprint, never the arguments. */
+  argsHash: string;
+  verdict: Verdict;
+  /** Human-readable reason, shown in the dashboard. Null when simply allowed. */
+  reason: string | null;
+  /** Round-trip time in milliseconds, measured at the gateway. */
+  latencyMs: number;
+  /** ISO-8601 timestamp. Strings, not Dates — these cross a JSON boundary. */
+  startedAt: string;
+}
+
+/** Shape of GET /healthz. Trivial now; it will grow dependency checks. */
+export interface HealthResponse {
+  status: "ok" | "degraded";
+  service: string;
+  version: string;
+  uptimeSeconds: number;
+}

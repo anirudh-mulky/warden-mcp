@@ -1,0 +1,38 @@
+# Local dependencies. Nothing in the code uses these yet — Day 4 onward
+# does. Getting them running now means Day 4 is about your code, not
+# about fighting Docker.
+#
+#   pnpm infra:up     start them in the background
+#   pnpm infra:logs   watch their output
+#   pnpm infra:down   stop them (data survives, it lives in the volumes)
+
+services:
+  mongo:
+    image: mongo:8
+    container_name: warden-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # DynamoDB Local: the real DynamoDB engine, running on your laptop.
+  # Same API as AWS, so the code you write here is the code that ships.
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    container_name: warden-dynamodb
+    ports:
+      - "8000:8000"
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
+    working_dir: /home/dynamodblocal
+    volumes:
+      - dynamo-data:/data
+    user: root
+
+volumes:
+  mongo-data:
+  dynamo-data:
