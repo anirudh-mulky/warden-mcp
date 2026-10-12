@@ -3,7 +3,7 @@ import express, { type Express, type Request, type Response } from "express";
 // types put the function at `.default`, so a default import type-checks as
 // a non-callable object even though it works at runtime.
 import { pinoHttp } from "pino-http";
-import type { HealthResponse } from "@warden/shared";
+import type { HealthResponse, ReadyResponse } from "@warden/shared";
 import { logger } from "./logger.js";
 import { mcpRouter } from "./mcp/route.js";
 import type { UpstreamPool } from "./mcp/pool.js";
@@ -41,6 +41,28 @@ export function buildApp(deps: AppDeps): Express {
       version: VERSION,
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
     });
+  });
+
+  /**
+   * Readiness probe. Unlike /healthz this DOES inspect dependencies,
+   * because that is the question it exists to answer.
+   *
+   * Three states, not two. "degraded" is the one people forget to model,
+   * and it is the state a gateway spends most of its bad days in: still
+   * useful, just not whole. Collapsing it into "unhealthy" gets you
+   * restarted for no reason; collapsing it into "healthy" means nobody
+   * ever finds out.
+   */
+  app.get("/readyz", (_req: Request, res: Response<ReadyResponse>) => {
+    const upstreams = deps.pool.health();
+    const healthy = upstreams.filter((u) => u.status === "connected").length;
+
+    const status: ReadyResponse["status"] =
+      healthy === upstreams.length ? "ready" : healthy === 0 ? "unavailable" : "degraded";
+
+    // 503 only when nothing works at all. A degraded gateway still serves
+    // real traffic and must not be taken out of rotation for it.
+    res.status(status === "unavailable" ? 503 : 200).json({ status, upstreams });
   });
 
   app.use(mcpRouter(deps.pool));

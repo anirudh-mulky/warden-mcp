@@ -55,3 +55,22 @@ export interface HealthResponse {
   version: string;
   uptimeSeconds: number;
 }
+
+/** One upstream MCP server's current state, as reported by GET /readyz. */
+export interface UpstreamHealthView {
+  id: string;
+  namespace: string;
+  status: "connected" | "failed";
+  error?: string;
+  connectedAt?: string;
+}
+
+/**
+ * Shape of GET /readyz — the honest answer to "can this gateway actually
+ * serve traffic, and with what?". Distinct from /healthz, which only says
+ * whether the process is alive.
+ */
+export interface ReadyResponse {
+  status: "ready" | "degraded" | "unavailable";
+  upstreams: UpstreamHealthView[];
+}
