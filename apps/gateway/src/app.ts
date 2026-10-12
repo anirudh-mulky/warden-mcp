@@ -1,5 +1,8 @@
 import express, { type Express, type Request, type Response } from "express";
-import pinoHttp from "pino-http";
+// Named import, not default: pino-http is CommonJS, and under NodeNext its
+// types put the function at `.default`, so a default import type-checks as
+// a non-callable object even though it works at runtime.
+import { pinoHttp } from "pino-http";
 import type { HealthResponse } from "@warden/shared";
 import { logger } from "./logger.js";
 import { mcpRouter } from "./mcp/route.js";
