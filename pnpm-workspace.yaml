@@ -1,5 +1,8 @@
 packages:
   - "apps/*"
   - "packages/*"
+# Packages allowed to run install scripts (code that executes during
+# `pnpm install`). Everything not listed here is blocked — install scripts
+# are the most common way malicious npm packages attack a machine.
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true

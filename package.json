@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "A policy and observability gateway for Model Context Protocol servers.",
+  "packageManager": "pnpm@12.3.4",
   "engines": {
     "node": ">=22"
   },
@@ -17,10 +18,5 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }
