@@ -15,6 +15,10 @@ coverage/
 .DS_Store
 *.log
 
+# personal notes — study guide and AI-assistant instructions, not part of the project
+CLAUDE.md
+docs/GUIDE.md
+
 # terraform (Day 8)
 .terraform/
 *.tfstate
