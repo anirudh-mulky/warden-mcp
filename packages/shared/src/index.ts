@@ -14,6 +14,32 @@ export type Verdict = "allow" | "deny" | "throttle" | "error";
 export type TenantId = string & { readonly __brand: "TenantId" };
 export type ApiKeyId = string & { readonly __brand: "ApiKeyId" };
 
+/** One customer account. Every key, upstream and call record belongs to exactly one. */
+export interface Tenant {
+  id: TenantId;
+  name: string;
+  createdAt: string;
+}
+
+/**
+ * An API key as the outside world may see it.
+ *
+ * Deliberately has no hash and no secret. The dashboard renders this type,
+ * so anything on it can end up in a browser. The gateway's stored record
+ * extends it with the hash; that extension never leaves the backend.
+ */
+export interface ApiKey {
+  id: ApiKeyId;
+  tenantId: TenantId;
+  /** Human label, e.g. "cursor on my laptop". */
+  name: string;
+  /** First characters of the key, e.g. "wdn_4f9a". Enough to recognise it, useless to an attacker. */
+  prefix: string;
+  createdAt: string;
+  /** Null while the key works. Set instead of deleting, so the audit log keeps pointing at something. */
+  revokedAt: string | null;
+}
+
 /** An upstream MCP server that Warden proxies to. */
 export interface UpstreamServer {
   id: string;

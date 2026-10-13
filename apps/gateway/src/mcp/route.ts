@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { callerOf } from "../auth/middleware.js";
 import { logger } from "../logger.js";
 import { buildMcpServer } from "./server.js";
 import type { UpstreamPool } from "./pool.js";
@@ -26,7 +27,9 @@ export function mcpRouter(pool: UpstreamPool): Router {
   const router = Router();
 
   router.post("/mcp", async (req: Request, res: Response) => {
-    const server = buildMcpServer(pool);
+    // requireApiKey ran before this handler (see app.ts), so the caller
+    // is known. Each request's server is built for exactly one tenant.
+    const server = buildMcpServer(pool, callerOf(res));
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
     // If the client hangs up mid-request, tear both down or we leak.

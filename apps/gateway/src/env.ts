@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { looksLikeApiKey } from "./auth/keys.js";
 
 /**
  * Environment variables, parsed and validated once at startup.
@@ -18,6 +19,11 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   MONGODB_URI: z.string().url().default("mongodb://localhost:27017/warden"),
   DYNAMODB_ENDPOINT: z.string().url().optional(),
+  /** Development only: one fixed key seeded at boot, so it survives tsx restarts. */
+  WARDEN_DEV_API_KEY: z
+    .string()
+    .refine(looksLikeApiKey, "must be a Warden API key: wdn_ followed by 43 characters")
+    .optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

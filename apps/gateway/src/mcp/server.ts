@@ -3,6 +3,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { Caller } from "../auth/middleware.js";
 import { logger } from "../logger.js";
 import type { UpstreamPool } from "./pool.js";
 
@@ -15,7 +16,7 @@ import type { UpstreamPool } from "./pool.js";
  * upstreams at request time. That means handling the raw protocol
  * methods ourselves, which is exactly what a proxy should do.
  */
-export function buildMcpServer(pool: UpstreamPool): Server {
+export function buildMcpServer(pool: UpstreamPool, caller: Caller): Server {
   const server = new Server(
     { name: "warden", version: "0.0.0" },
     // Declaring `tools: {}` tells the client "I support the tools/*
@@ -36,12 +37,15 @@ export function buildMcpServer(pool: UpstreamPool): Server {
     // Day 5 puts the policy check right here, before the call is
     // forwarded. Today everything is allowed — this is the seam.
 
+    // Who made the call goes on every line — this is the audit log's first column.
+    const who = { tenantId: caller.tenantId, apiKeyId: caller.apiKeyId };
+
     try {
       const result = await pool.callTool(name, args);
-      logger.info({ tool: name, latencyMs: Date.now() - startedAt, verdict: "allow" }, "tools/call");
+      logger.info({ ...who, tool: name, latencyMs: Date.now() - startedAt, verdict: "allow" }, "tools/call");
       return result;
     } catch (err) {
-      logger.error({ tool: name, latencyMs: Date.now() - startedAt, err }, "tools/call failed");
+      logger.error({ ...who, tool: name, latencyMs: Date.now() - startedAt, err }, "tools/call failed");
       // MCP convention: tool failures come back as a result with
       // isError, not as a JSON-RPC error. A protocol-level error means
       // "your request was malformed"; a failed tool is a valid request
