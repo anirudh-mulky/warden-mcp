@@ -19,12 +19,24 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   MONGODB_URI: z.string().url().default("mongodb://localhost:27017/warden"),
   DYNAMODB_ENDPOINT: z.string().url().optional(),
+  AWS_REGION: z.string().default("us-east-1"),
+  DYNAMODB_TABLE_API_KEYS: z.string().default("warden-api-keys"),
+  DYNAMODB_TABLE_RATE_LIMITS: z.string().default("warden-rate-limits"),
   /** Development only: one fixed key seeded at boot, so it survives tsx restarts. */
   WARDEN_DEV_API_KEY: z
     .string()
     .refine(looksLikeApiKey, "must be a Warden API key: wdn_ followed by 43 characters")
     .optional(),
-});
+}).refine(
+  // Safety lock: in development, DynamoDB must point at the local copy in
+  // Docker. Without this, a missing DYNAMODB_ENDPOINT would send requests
+  // to real AWS — which costs money and touches real data.
+  (e) => e.NODE_ENV !== "development" || e.DYNAMODB_ENDPOINT !== undefined,
+  {
+    message: "DYNAMODB_ENDPOINT must be set in development (e.g. http://localhost:8000)",
+    path: ["DYNAMODB_ENDPOINT"],
+  },
+);
 
 const parsed = envSchema.safeParse(process.env);
 

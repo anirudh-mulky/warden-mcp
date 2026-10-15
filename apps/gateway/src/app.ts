@@ -4,18 +4,18 @@ import express, { type Express, type Request, type Response } from "express";
 // a non-callable object even though it works at runtime.
 import { pinoHttp } from "pino-http";
 import type { HealthResponse, ReadyResponse } from "@warden/shared";
+import { apiRouter } from "./api/routes.js";
 import { requireApiKey } from "./auth/middleware.js";
 import type { KeyStore } from "./auth/store.js";
 import { logger } from "./logger.js";
 import { mcpRouter } from "./mcp/route.js";
-import type { UpstreamPool } from "./mcp/pool.js";
+import type { McpDeps } from "./mcp/server.js";
 
 const startedAt = Date.now();
 const VERSION = "0.0.0";
 
 /** Everything the app needs from the outside world, passed in explicitly. */
-export interface AppDeps {
-  pool: UpstreamPool;
+export interface AppDeps extends McpDeps {
   keyStore: KeyStore;
 }
 
@@ -71,7 +71,9 @@ export function buildApp(deps: AppDeps): Express {
   // Everything under /mcp needs a valid key. /healthz and /readyz above
   // stay open on purpose: AWS health checks cannot carry an API key.
   app.use("/mcp", requireApiKey(deps.keyStore));
-  app.use(mcpRouter(deps.pool));
+  app.use(mcpRouter(deps));
+  app.use("/api", requireApiKey(deps.keyStore));
+  app.use(apiRouter(deps));
 
   app.use((req: Request, res: Response) => {
     res.status(404).json({ error: "not_found", path: req.path });

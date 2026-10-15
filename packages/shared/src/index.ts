@@ -74,6 +74,39 @@ export interface ToolCallRecord {
   startedAt: string;
 }
 
+/**
+ * A tenant's rules. Evaluated on every tools/list and tools/call.
+ *
+ * Patterns: "*" matches every tool, "fs.*" matches every tool in the fs
+ * namespace, anything else must match the namespaced tool name exactly.
+ */
+export interface Policy {
+  tenantId: TenantId;
+  /** If non-empty, ONLY tools matching one of these may be called. Empty = all tools. */
+  allow: string[];
+  /** Tools matching any of these are always refused. Deny beats allow. */
+  deny: string[];
+  /** Max tools/call per API key per minute. null = unlimited. */
+  rateLimitPerMinute: number | null;
+  updatedAt: string;
+}
+
+/** The editable part of a Policy, as sent by the dashboard. */
+export type PolicyInput = Pick<Policy, "allow" | "deny" | "rateLimitPerMinute">;
+
+/** Per-tool summary over a tenant's recent calls. Latencies are measured, never estimated. */
+export interface ToolStats {
+  tool: string;
+  calls: number;
+  allowed: number;
+  denied: number;
+  throttled: number;
+  errors: number;
+  /** Over allowed calls only. Null when there are none to measure. */
+  p50Ms: number | null;
+  p95Ms: number | null;
+}
+
 /** Shape of GET /healthz. Trivial now; it will grow dependency checks. */
 export interface HealthResponse {
   status: "ok" | "degraded";

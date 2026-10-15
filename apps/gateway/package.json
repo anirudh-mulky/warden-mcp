@@ -7,12 +7,17 @@
     "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:setup": "tsx --env-file-if-exists=.env src/scripts/create-tables.ts",
+    "keys": "tsx --env-file-if-exists=.env src/scripts/keys.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1151.0",
+    "@aws-sdk/lib-dynamodb": "^3.1151.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@warden/shared": "workspace:*",
     "express": "^5.1.0",
+    "mongodb": "^6.10.0",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
     "zod": "^4.0.0"

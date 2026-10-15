@@ -10,6 +10,9 @@
   },
   "scripts": {
     "dev": "pnpm --filter @warden/gateway dev",
+    "dashboard": "pnpm --filter @warden/dashboard dev",
+    "db:setup": "pnpm --filter @warden/gateway db:setup",
+    "keys": "pnpm --filter @warden/gateway keys",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "infra:up": "docker compose up -d",
