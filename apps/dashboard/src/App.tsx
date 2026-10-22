@@ -39,22 +39,9 @@ function currentTab(): Tab {
   return PAGES.some((p) => p.id === hash) ? (hash as Tab) : "overview";
 }
 
-/** The animated colour field behind the glass. Purely decorative. */
-function Aurora() {
-  return (
-    <div className="aurora" aria-hidden="true">
-      <span className="blob b1" />
-      <span className="blob b2" />
-      <span className="blob b3" />
-      <span className="grain" />
-    </div>
-  );
-}
-
 export function App() {
   return (
     <ToastProvider>
-      <Aurora />
       <Root />
     </ToastProvider>
   );
