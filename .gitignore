@@ -6,8 +6,9 @@ dist/
 *.tsbuildinfo
 
 # secrets — never commit these
-.env
-.env.local
+# Any .env variant (.env, .env.local, even a typo like ".env,") — except templates.
+.env*
+!.env.example
 *.pem
 
 # tooling
@@ -19,7 +20,8 @@ coverage/
 CLAUDE.md
 docs/GUIDE.md
 
-# terraform (Day 8)
+# terraform (not used — Warden runs locally only)
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfvars

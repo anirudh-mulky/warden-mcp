@@ -1,0 +1,11 @@
+# Keep the build context small, and never copy secrets into an image.
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+docs
+CLAUDE.md
+*.log

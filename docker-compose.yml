@@ -1,10 +1,13 @@
-# Local dependencies. Nothing in the code uses these yet — Day 4 onward
-# does. Getting them running now means Day 4 is about your code, not
-# about fighting Docker.
+# Everything Warden needs, on your own machine. No cloud account, no cost.
 #
-#   pnpm infra:up     start them in the background
-#   pnpm infra:logs   watch their output
+# Development (you run the gateway with `pnpm dev`):
+#   pnpm infra:up     start only the two databases
 #   pnpm infra:down   stop them (data survives, it lives in the volumes)
+#
+# The whole app, one command (needs JWT_SECRET in a root .env — see README):
+#   pnpm app          build and start databases + gateway + dashboard
+#   pnpm app:down     stop it all
+#   then open http://localhost:8080
 
 services:
   mongo:
@@ -20,8 +23,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # DynamoDB Local: the real DynamoDB engine, running on your laptop.
-  # Same API as AWS, so the code you write here is the code that ships.
+  # DynamoDB Local: the real DynamoDB engine, running on your machine, free.
   dynamodb:
     image: amazon/dynamodb-local:latest
     container_name: warden-dynamodb
@@ -32,6 +34,35 @@ services:
     volumes:
       - dynamo-data:/data
     user: root
+
+  # One-off: create the DynamoDB tables (idempotent), then exit.
+  setup:
+    profiles: ["app"]
+    build: .
+    command: ["node", "dist/scripts/create-tables.js"]
+    environment: &app-env
+      MONGODB_URI: mongodb://mongo:27017/warden
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env at the repo root (see README)}
+      SIGNUP_CODE: ${SIGNUP_CODE:-}
+    depends_on:
+      dynamodb:
+        condition: service_started
+
+  # The gateway: /mcp for agents, /api and the dashboard for humans.
+  gateway:
+    profiles: ["app"]
+    build: .
+    container_name: warden-gateway
+    ports:
+      - "8080:8080"
+    environment: *app-env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   mongo-data:

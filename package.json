@@ -13,11 +13,16 @@
     "dashboard": "pnpm --filter @warden/dashboard dev",
     "db:setup": "pnpm --filter @warden/gateway db:setup",
     "keys": "pnpm --filter @warden/gateway keys",
+    "test": "pnpm --filter @warden/gateway test",
+    "test:integration": "pnpm --filter @warden/gateway test:integration",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "infra:up": "docker compose up -d",
+    "infra:up": "docker compose up -d mongo dynamodb",
     "infra:down": "docker compose down",
-    "infra:logs": "docker compose logs -f"
+    "infra:logs": "docker compose logs -f",
+    "app": "docker compose --profile app up --build -d",
+    "app:down": "docker compose --profile app down",
+    "app:logs": "docker compose --profile app logs -f gateway"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
