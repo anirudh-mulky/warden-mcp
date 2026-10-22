@@ -1,0 +1,51 @@
+name: ci
+
+# Free: GitHub Actions minutes cost nothing on public repositories. There is
+# no deploy step and no cloud credential anywhere in this workflow.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The same two databases as docker-compose.yml, for the integration test.
+    services:
+      mongo:
+        image: mongo:8
+        ports: ["27017:27017"]
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports: ["8000:8000"]
+
+    env:
+      MONGODB_URI: mongodb://localhost:27017/warden
+      DYNAMODB_ENDPOINT: http://localhost:8000
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from "packageManager" in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm db:setup
+      - run: pnpm test:integration
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t warden .
