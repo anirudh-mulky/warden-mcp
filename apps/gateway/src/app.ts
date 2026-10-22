@@ -79,12 +79,20 @@ export function buildApp(deps: AppDeps): Express {
     res.status(404).json({ error: "not_found", path: req.originalUrl });
   });
 
-  // The built dashboard, when there is one (the Docker image). Any other GET falls
-  // back to index.html so the single-page app handles its own routes.
+  // The built dashboard, when there is one (the Docker image). Page requests
+  // fall back to index.html so the single-page app handles its own routes.
   if (env.DASHBOARD_DIR !== undefined) {
     const dir = env.DASHBOARD_DIR;
     app.use(express.static(dir, { index: "index.html", maxAge: "1h" }));
-    app.get(/^\/(?!mcp|api|healthz|readyz).*/, (_req: Request, res: Response) => {
+    app.get(/^\/(?!mcp|api|healthz|readyz|\.well-known).*/, (req: Request, res: Response, next) => {
+      // Only browsers asking for a page get the dashboard. A program asking
+      // for JSON (e.g. an MCP client probing /.well-known/oauth-* after a
+      // 401) must get a real 404 — an HTML page with status 200 tells it
+      // "yes, OAuth lives here" and it fails trying to parse the page.
+      if (req.accepts(["html", "json"]) !== "html") {
+        next();
+        return;
+      }
       res.sendFile(join(dir, "index.html"));
     });
   }
