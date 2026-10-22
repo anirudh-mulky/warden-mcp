@@ -36,8 +36,9 @@ export const api = {
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
   me: () => request<Me>("/api/me"),
 
-  calls: (since?: string) =>
-    request<ToolCallRecord[]>(`/api/calls?limit=200${since ? `&since=${encodeURIComponent(since)}` : ""}`),
+  calls: (since?: string, limit = 500) =>
+    request<ToolCallRecord[]>(`/api/calls?limit=${limit}${since ? `&since=${encodeURIComponent(since)}` : ""}`),
+  health: () => fetch("/readyz").then((r) => r.json() as Promise<{ status: "ready" | "degraded" | "unavailable"; upstreams: { namespace: string; status: string }[] }>),
   stats: () => request<ToolStats[]>("/api/stats"),
   tools: () => request<ToolInfo[]>("/api/tools"),
 

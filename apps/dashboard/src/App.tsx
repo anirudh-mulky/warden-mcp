@@ -1,22 +1,46 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ApiKey, Me, Policy, ToolCallRecord, ToolInfo, ToolStats, Verdict } from "@warden/shared";
 import { api, ApiError } from "./api";
+import { CallsChart, VERDICT_NAME } from "./CallsChart";
+import { ToastProvider, useToast } from "./Toast";
 
-const FEED_LIMIT = 200;
+const FEED_LIMIT = 500;
 const POLL_MS = 2_000;
 
 /** Where agents connect. In local dev the dashboard (5173) and gateway (8080) are separate servers. */
 const MCP_URL = location.port === "5173" ? "http://localhost:8080/mcp" : `${location.origin}/mcp`;
 
 type Tab = "overview" | "policy" | "keys" | "connect";
-const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "policy", label: "Policy" },
-  { id: "keys", label: "API keys" },
-  { id: "connect", label: "Connect" },
+const PAGES: { id: Tab; label: string; title: string; subtitle: string; icon: ReactNode }[] = [
+  { id: "overview", label: "Overview", title: "Overview", subtitle: "Every tool call your agents make, as it happens.", icon: <IconChart /> },
+  { id: "policy", label: "Policy", title: "Policy", subtitle: "Choose which tools your agents may call, and how often.", icon: <IconShield /> },
+  { id: "keys", label: "API keys", title: "API keys", subtitle: "Credentials your agents use to connect to Warden.", icon: <IconKey /> },
+  { id: "connect", label: "Connect", title: "Connect an agent", subtitle: "Point any MCP client at Warden in under a minute.", icon: <IconPlug /> },
 ];
 
-/* ------------------------------------------------------------------ helpers */
+/* ------------------------------------------------------------------ icons */
+
+function Svg({ children }: { children: ReactNode }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
+  );
+}
+function IconChart() {
+  return <Svg><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></Svg>;
+}
+function IconShield() {
+  return <Svg><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z" /><path d="M9 12l2 2 4-4" /></Svg>;
+}
+function IconKey() {
+  return <Svg><circle cx="8" cy="15" r="4" /><path d="M11 12l9-9M17 6l3 3M14 9l2 2" /></Svg>;
+}
+function IconPlug() {
+  return <Svg><path d="M9 7V3M15 7V3M6 7h12v4a6 6 0 01-12 0V7zM12 17v4" /></Svg>;
+}
+
+/* ---------------------------------------------------------------- helpers */
 
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(Date.now());
@@ -42,10 +66,8 @@ function errorText(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-const VERDICT_LABEL: Record<Verdict, string> = { allow: "allowed", deny: "blocked", throttle: "throttled", error: "error" };
-
 function VerdictBadge({ verdict }: { verdict: Verdict }) {
-  return <span className={`badge ${verdict}`}>{VERDICT_LABEL[verdict]}</span>;
+  return <span className={`badge ${verdict}`}>{VERDICT_NAME[verdict]}</span>;
 }
 
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
@@ -63,14 +85,41 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
           .catch(() => undefined);
       }}
     >
-      {done ? "Copied" : label}
+      {done ? "Copied ✓" : label}
     </button>
   );
 }
 
-function Card({ title, subtitle, actions, children }: { title: string; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode }) {
+/** A button that shows "Saving…" while its action runs and "Saved ✓" briefly after. */
+function SaveButton({ onSave, children }: { onSave: () => Promise<boolean>; children: ReactNode }) {
+  const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
   return (
-    <section className="card">
+    <button
+      className={`btn primary ${state}`}
+      disabled={state === "saving"}
+      onClick={async () => {
+        setState("saving");
+        const ok = await onSave();
+        setState(ok ? "saved" : "idle");
+        if (ok) setTimeout(() => setState("idle"), 1600);
+      }}
+    >
+      {state === "saving" ? (
+        <>
+          <span className="spinner" aria-hidden="true" /> Saving…
+        </>
+      ) : state === "saved" ? (
+        "Saved ✓"
+      ) : (
+        children
+      )}
+    </button>
+  );
+}
+
+function Card({ title, subtitle, actions, children, className }: { title: string; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <section className={`card ${className ?? ""}`}>
       <div className="card-head">
         <div>
           <h2>{title}</h2>
@@ -83,14 +132,22 @@ function Card({ title, subtitle, actions, children }: { title: string; subtitle?
   );
 }
 
-/* --------------------------------------------------------------------- app */
+/* -------------------------------------------------------------------- app */
 
 function currentTab(): Tab {
   const hash = location.hash.slice(1);
-  return TABS.some((t) => t.id === hash) ? (hash as Tab) : "overview";
+  return PAGES.some((p) => p.id === hash) ? (hash as Tab) : "overview";
 }
 
 export function App() {
+  return (
+    <ToastProvider>
+      <Root />
+    </ToastProvider>
+  );
+}
+
+function Root() {
   const [me, setMe] = useState<Me | null>(null);
   const [checking, setChecking] = useState(true);
   const [tab, setTab] = useState<Tab>(currentTab);
@@ -112,41 +169,77 @@ export function App() {
   if (checking) return <div className="center muted">Loading…</div>;
   if (me === null) return <AuthScreen onSignedIn={setMe} />;
 
+  const page = PAGES.find((p) => p.id === tab) ?? PAGES[0]!;
+
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="topbar-inner">
-          <div className="brand">
-            <span className="logo" aria-hidden="true">W</span>
-            Warden
-          </div>
-          <nav className="tabs" aria-label="Sections">
-            {TABS.map((t) => (
-              <a key={t.id} href={`#${t.id}`} className={tab === t.id ? "tab active" : "tab"} aria-current={tab === t.id ? "page" : undefined}>
-                {t.label}
-              </a>
-            ))}
-          </nav>
-          <div className="account">
-            <span className="muted email">{me.email}</span>
-            <span className="pill mono" title="Your tenant id">{me.tenantId}</span>
-            <button className="btn ghost small" onClick={() => void api.logout().finally(() => setMe(null))}>
-              Sign out
-            </button>
-          </div>
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="logo" aria-hidden="true">W</span>
+          <span>Warden</span>
         </div>
-      </header>
-      <main className="page">
-        {tab === "overview" && <Overview onGoTo={(t) => (location.hash = t)} />}
-        {tab === "policy" && <PolicyPanel />}
-        {tab === "keys" && <KeysPanel />}
-        {tab === "connect" && <ConnectPanel />}
-      </main>
+        <nav className="nav" aria-label="Sections">
+          {PAGES.map((p) => (
+            <a key={p.id} href={`#${p.id}`} className={tab === p.id ? "nav-item active" : "nav-item"} aria-current={tab === p.id ? "page" : undefined}>
+              {p.icon}
+              <span>{p.label}</span>
+            </a>
+          ))}
+        </nav>
+        <div className="sidebar-foot">
+          <div className="who">
+            <span className="avatar" aria-hidden="true">{me.email.slice(0, 1).toUpperCase()}</span>
+            <div className="who-text">
+              <span className="who-email" title={me.email}>{me.email}</span>
+              <span className="mono muted who-tenant" title="Your tenant id">{me.tenantId}</span>
+            </div>
+          </div>
+          <button className="btn ghost small full" onClick={() => void api.logout().finally(() => setMe(null))}>
+            Sign out
+          </button>
+        </div>
+      </aside>
+
+      <div className="main">
+        <header className="page-head">
+          <div>
+            <h1>{page.title}</h1>
+            <p className="muted">{page.subtitle}</p>
+          </div>
+          <HealthPill />
+        </header>
+        <div className="content">
+          {tab === "overview" && <Overview onGoTo={(t) => (location.hash = t)} />}
+          {tab === "policy" && <PolicyPanel />}
+          {tab === "keys" && <KeysPanel />}
+          {tab === "connect" && <ConnectPanel />}
+        </div>
+      </div>
     </div>
   );
 }
 
-/* -------------------------------------------------------------------- auth */
+/** Gateway status from /readyz: ready, degraded (some upstreams down), or unavailable. */
+function HealthPill() {
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof api.health>> | null>(null);
+  useEffect(() => {
+    const load = () => api.health().then(setHealth).catch(() => setHealth(null));
+    void load();
+    const t = setInterval(load, 10_000);
+    return () => clearInterval(t);
+  }, []);
+  if (health === null) return <span className="health unknown">Gateway unreachable</span>;
+  const up = health.upstreams.filter((u) => u.status === "connected").length;
+  const label = health.status === "ready" ? "Gateway healthy" : health.status === "degraded" ? "Gateway degraded" : "Gateway unavailable";
+  return (
+    <span className={`health ${health.status}`} title={health.upstreams.map((u) => `${u.namespace}: ${u.status}`).join("\n")}>
+      <span className="health-dot" aria-hidden="true" />
+      {label} · {up}/{health.upstreams.length} upstreams
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------- auth */
 
 function AuthScreen({ onSignedIn }: { onSignedIn: (me: Me) => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -211,7 +304,9 @@ function AuthScreen({ onSignedIn }: { onSignedIn: (me: Me) => void }) {
         </label>
         {mode === "signup" && (
           <label className="field">
-            <span>Sign-up code <em className="muted">(only if this server requires one)</em></span>
+            <span>
+              Sign-up code <em className="muted">(only if this server requires one)</em>
+            </span>
             <input className="input" value={code} onChange={(e) => setCode(e.target.value)} />
           </label>
         )}
@@ -237,117 +332,18 @@ function AuthScreen({ onSignedIn }: { onSignedIn: (me: Me) => void }) {
   );
 }
 
-/* ---------------------------------------------------------------- overview */
-
-function Overview({ onGoTo }: { onGoTo: (tab: Tab) => void }) {
-  const [stats, setStats] = useState<ToolStats[] | null>(null);
-
-  useEffect(() => {
-    const load = () => api.stats().then(setStats).catch(() => undefined);
-    void load();
-    const t = setInterval(load, 5_000);
-    return () => clearInterval(t);
-  }, []);
-
-  const totals = useMemo(() => {
-    const s = stats ?? [];
-    const sum = (f: (x: ToolStats) => number) => s.reduce((a, x) => a + f(x), 0);
-    const p95s = s.map((x) => x.p95Ms).filter((v): v is number => v !== null);
-    return {
-      calls: sum((x) => x.calls),
-      allowed: sum((x) => x.allowed),
-      blocked: sum((x) => x.denied),
-      throttled: sum((x) => x.throttled),
-      worstP95: p95s.length === 0 ? null : Math.max(...p95s),
-    };
-  }, [stats]);
-
-  return (
-    <>
-      <div className="tiles">
-        <Tile label="Calls" value={totals.calls} hint="last 500" />
-        <Tile label="Allowed" value={totals.allowed} tone="allow" />
-        <Tile label="Blocked" value={totals.blocked} tone="deny" />
-        <Tile label="Throttled" value={totals.throttled} tone="throttle" />
-        <Tile label="Slowest p95" value={totals.worstP95 === null ? "—" : `${totals.worstP95} ms`} hint="worst tool" />
-      </div>
-
-      {stats !== null && stats.length === 0 && (
-        <div className="empty-hero card">
-          <h2>No calls yet</h2>
-          <p className="muted">Create an API key, connect an MCP client to Warden, and calls will appear here live.</p>
-          <div className="row">
-            <button className="btn primary" onClick={() => onGoTo("keys")}>
-              Create a key
-            </button>
-            <button className="btn ghost" onClick={() => onGoTo("connect")}>
-              How to connect
-            </button>
-          </div>
-        </div>
-      )}
-
-      <LiveFeed />
-
-      {stats !== null && stats.length > 0 && (
-        <Card title="By tool" subtitle="Latency percentiles are over allowed calls only, measured at the gateway.">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Tool</th>
-                  <th className="num">Calls</th>
-                  <th className="num">Allowed</th>
-                  <th className="num">Blocked</th>
-                  <th className="num">Throttled</th>
-                  <th className="num">Errors</th>
-                  <th className="num">p50</th>
-                  <th className="num">p95</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.map((s) => (
-                  <tr key={s.tool}>
-                    <td className="mono">{s.tool}</td>
-                    <td className="num">{s.calls}</td>
-                    <td className="num">{s.allowed}</td>
-                    <td className="num">{s.denied}</td>
-                    <td className="num">{s.throttled}</td>
-                    <td className="num">{s.errors}</td>
-                    <td className="num">{s.p50Ms === null ? "—" : `${s.p50Ms} ms`}</td>
-                    <td className="num">{s.p95Ms === null ? "—" : `${s.p95Ms} ms`}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-    </>
-  );
-}
-
-function Tile({ label, value, hint, tone }: { label: string; value: number | string; hint?: string; tone?: Verdict }) {
-  return (
-    <div className={`tile ${tone ?? ""}`}>
-      <span className="tile-label">{label}</span>
-      <span className="tile-value">{value}</span>
-      {hint !== undefined && <span className="tile-hint">{hint}</span>}
-    </div>
-  );
-}
+/* --------------------------------------------------------------- overview */
 
 /**
- * Live feed by polling: every 2s, ask for calls newer than the newest one we
- * have. Polling works identically however many gateway instances run, where a
- * long-held stream would only see the instance it happened to connect to.
+ * One poller feeds the chart and the feed: every 2s, ask for calls newer
+ * than the newest one we have. Polling works identically however many
+ * gateway instances run, where a long-held stream would only see the one
+ * instance it happened to connect to.
  */
-function LiveFeed() {
+function useCalls() {
   const [calls, setCalls] = useState<ToolCallRecord[]>([]);
   const [live, setLive] = useState(false);
-  const [filter, setFilter] = useState<Verdict | "all">("all");
   const newest = useRef<string | undefined>(undefined);
-  const now = useNow(5_000);
 
   useEffect(() => {
     let stopped = false;
@@ -375,7 +371,121 @@ function LiveFeed() {
     };
   }, []);
 
-  const shown = filter === "all" ? calls : calls.filter((c) => c.verdict === filter);
+  return { calls, live };
+}
+
+function Overview({ onGoTo }: { onGoTo: (tab: Tab) => void }) {
+  const [stats, setStats] = useState<ToolStats[] | null>(null);
+  const { calls, live } = useCalls();
+  const now = useNow(5_000);
+
+  useEffect(() => {
+    const load = () => api.stats().then(setStats).catch(() => undefined);
+    void load();
+    const t = setInterval(load, 5_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const totals = useMemo(() => {
+    const s = stats ?? [];
+    const sum = (f: (x: ToolStats) => number) => s.reduce((a, x) => a + f(x), 0);
+    const p95s = s.map((x) => x.p95Ms).filter((v): v is number => v !== null);
+    const calls = sum((x) => x.calls);
+    return {
+      calls,
+      allowed: sum((x) => x.allowed),
+      blocked: sum((x) => x.denied),
+      throttled: sum((x) => x.throttled),
+      blockedShare: calls === 0 ? null : Math.round((sum((x) => x.denied + x.throttled) / calls) * 100),
+      worstP95: p95s.length === 0 ? null : Math.max(...p95s),
+    };
+  }, [stats]);
+
+  const top = (stats ?? []).slice(0, 6);
+  const topMax = Math.max(1, ...top.map((t) => t.calls));
+
+  return (
+    <>
+      <div className="tiles">
+        <Tile label="Total calls" value={totals.calls} hint="last 500" />
+        <Tile label="Allowed" value={totals.allowed} tone="allow" />
+        <Tile label="Blocked" value={totals.blocked} tone="deny" />
+        <Tile label="Throttled" value={totals.throttled} tone="throttle" />
+        <Tile label="Refused" value={totals.blockedShare === null ? "—" : `${totals.blockedShare}%`} hint="blocked + throttled" />
+        <Tile label="Slowest p95" value={totals.worstP95 === null ? "—" : `${totals.worstP95} ms`} hint="worst tool" />
+      </div>
+
+      {stats !== null && stats.length === 0 && (
+        <div className="empty-hero card">
+          <h2>No calls yet</h2>
+          <p className="muted">Create an API key, connect an MCP client to Warden, and calls will appear here live.</p>
+          <div className="row center-row">
+            <button className="btn primary" onClick={() => onGoTo("keys")}>
+              Create a key
+            </button>
+            <button className="btn ghost" onClick={() => onGoTo("connect")}>
+              How to connect
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="split">
+        <Card title="Calls per minute" subtitle="Last 30 minutes, by result. Hover a bar for exact counts." className="grow-card">
+          <CallsChart calls={calls} now={now} />
+        </Card>
+        <Card title="Top tools" subtitle="By calls, last 500 · p95 latency">
+          {top.length === 0 ? (
+            <p className="empty muted">Nothing yet.</p>
+          ) : (
+            <ul className="top-tools">
+              {top.map((t) => (
+                <li key={t.tool}>
+                  <div className="top-row">
+                    <span className="mono top-name" title={t.tool}>{t.tool}</span>
+                    <span className="muted num">{t.calls}</span>
+                  </div>
+                  <div className="meter" aria-hidden="true">
+                    <span style={{ width: `${(t.calls / topMax) * 100}%` }} />
+                  </div>
+                  <div className="top-meta muted">
+                    {t.denied + t.throttled > 0 ? `${t.denied + t.throttled} refused · ` : ""}p95 {t.p95Ms === null ? "—" : `${t.p95Ms} ms`}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <LiveFeed calls={calls} live={live} now={now} />
+    </>
+  );
+}
+
+function Tile({ label, value, hint, tone }: { label: string; value: number | string; hint?: string; tone?: Verdict }) {
+  return (
+    <div className={`tile ${tone ?? ""}`}>
+      <span className="tile-label">
+        {tone !== undefined && <span className={`swatch v-${tone}`} aria-hidden="true" />}
+        {label}
+      </span>
+      <span className="tile-value">{value}</span>
+      {hint !== undefined && <span className="tile-hint">{hint}</span>}
+    </div>
+  );
+}
+
+function LiveFeed({ calls, live, now }: { calls: ToolCallRecord[]; live: boolean; now: number }) {
+  const [filter, setFilter] = useState<Verdict | "all">("all");
+  const [query, setQuery] = useState("");
+  const firstSeen = useRef<Set<string> | null>(null);
+
+  // Rows that arrive after the first load get a short highlight.
+  if (firstSeen.current === null && calls.length > 0) firstSeen.current = new Set(calls.map((c) => c.id));
+
+  const q = query.trim().toLowerCase();
+  const shown = calls.filter((c) => (filter === "all" || c.verdict === filter) && (q === "" || c.tool.toLowerCase().includes(q))).slice(0, 100);
   const filters: (Verdict | "all")[] = ["all", "allow", "deny", "throttle", "error"];
 
   return (
@@ -387,17 +497,20 @@ function LiveFeed() {
         </span>
       }
       actions={
-        <div className="chips" role="group" aria-label="Filter by verdict">
-          {filters.map((f) => (
-            <button key={f} className={filter === f ? "chip active" : "chip"} onClick={() => setFilter(f)}>
-              {f === "all" ? "All" : VERDICT_LABEL[f]}
-            </button>
-          ))}
+        <div className="row">
+          <input className="input search" placeholder="Filter by tool…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Filter by tool" />
+          <div className="chips" role="group" aria-label="Filter by result">
+            {filters.map((f) => (
+              <button key={f} className={filter === f ? "chip active" : "chip"} onClick={() => setFilter(f)}>
+                {f === "all" ? "All" : VERDICT_NAME[f]}
+              </button>
+            ))}
+          </div>
         </div>
       }
     >
       {shown.length === 0 ? (
-        <p className="empty muted">{calls.length === 0 ? "Waiting for the first tool call…" : "No calls match this filter."}</p>
+        <p className="empty muted">{calls.length === 0 ? "Waiting for the first tool call…" : "No calls match these filters."}</p>
       ) : (
         <div className="table-wrap">
           <table>
@@ -412,7 +525,7 @@ function LiveFeed() {
             </thead>
             <tbody>
               {shown.map((c) => (
-                <tr key={c.id}>
+                <tr key={c.id} className={firstSeen.current !== null && !firstSeen.current.has(c.id) ? "fresh" : undefined}>
                   <td className="muted nowrap" title={new Date(c.startedAt).toLocaleString()}>
                     {ago(c.startedAt, now)}
                   </td>
@@ -432,7 +545,7 @@ function LiveFeed() {
   );
 }
 
-/* ------------------------------------------------------------------ policy */
+/* ----------------------------------------------------------------- policy */
 
 function linesToList(text: string): string[] {
   return text
@@ -442,56 +555,77 @@ function linesToList(text: string): string[] {
 }
 
 function PolicyPanel() {
+  const toast = useToast();
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
-  const [status, setStatus] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [limit, setLimit] = useState("");
   const [allowText, setAllowText] = useState("");
   const [denyText, setDenyText] = useState("");
   const [busyTool, setBusyTool] = useState<string | null>(null);
+  const [flash, setFlash] = useState<Set<string>>(new Set());
+  const [loadError, setLoadError] = useState(false);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (previous?: ToolInfo[]) => {
     const [p, t] = await Promise.all([api.policy(), api.tools()]);
     setPolicy(p);
     setTools(t);
     setLimit(p.rateLimitPerMinute === null ? "" : String(p.rateLimitPerMinute));
     setAllowText(p.allow.join("\n"));
     setDenyText(p.deny.join("\n"));
+    // Briefly highlight every tool whose verdict this save changed.
+    if (previous !== undefined) {
+      const before = new Map(previous.map((x) => [x.name, x.verdict]));
+      const changed = new Set(t.filter((x) => before.get(x.name) !== x.verdict).map((x) => x.name));
+      setFlash(changed);
+      setTimeout(() => setFlash(new Set()), 1600);
+      return changed.size;
+    }
+    return 0;
   }, []);
 
   useEffect(() => {
-    reload().catch(() => setStatus({ kind: "error", text: "Could not load the policy." }));
+    reload().catch(() => setLoadError(true));
   }, [reload]);
 
-  /** Every change is saved straight away; the server then tells us the new verdict for each tool. */
-  const save = async (next: Pick<Policy, "allow" | "deny" | "rateLimitPerMinute">, message: string) => {
+  /** Save, reload what the server now says, and report it in a toast. */
+  const save = async (next: Pick<Policy, "allow" | "deny" | "rateLimitPerMinute">, message: (changed: number) => string): Promise<boolean> => {
     try {
       await api.savePolicy(next);
-      await reload();
-      setStatus({ kind: "ok", text: message });
+      const changed = await reload(tools);
+      toast("success", message(changed));
+      return true;
     } catch (err) {
-      setStatus({ kind: "error", text: errorText(err, "Save failed.") });
+      toast("error", errorText(err, "Save failed."));
+      return false;
     }
   };
 
-  if (policy === null) return <p className="muted">{status?.text ?? "Loading…"}</p>;
+  if (loadError) return <p className="error">Could not load the policy.</p>;
+  if (policy === null) return <p className="muted">Loading…</p>;
 
   const toggle = async (tool: ToolInfo) => {
     setBusyTool(tool.name);
     const blocked = policy.deny.includes(tool.name);
     const deny = blocked ? policy.deny.filter((d) => d !== tool.name) : [...policy.deny, tool.name];
-    await save({ ...policy, deny }, blocked ? `${tool.name} unblocked.` : `${tool.name} blocked.`);
+    await save({ ...policy, deny }, () => (blocked ? `${tool.name} is allowed again` : `${tool.name} is now blocked`));
     setBusyTool(null);
   };
 
-  const saveLimit = async () => {
+  const saveLimit = async (): Promise<boolean> => {
     const trimmed = limit.trim();
     if (trimmed !== "" && !/^[1-9]\d*$/.test(trimmed)) {
-      setStatus({ kind: "error", text: "The limit must be a whole number above 0, or blank for unlimited." });
-      return;
+      toast("error", "The limit must be a whole number above 0, or blank for unlimited.");
+      return false;
     }
-    await save({ ...policy, rateLimitPerMinute: trimmed === "" ? null : Number(trimmed) }, trimmed === "" ? "Rate limit removed." : `Limit set to ${trimmed} calls per minute per key.`);
+    return save({ ...policy, rateLimitPerMinute: trimmed === "" ? null : Number(trimmed) }, () =>
+      trimmed === "" ? "Rate limit removed — calls are unlimited" : `Rate limit set to ${trimmed} calls per minute per key`,
+    );
   };
+
+  const saveRules = (): Promise<boolean> =>
+    save({ ...policy, allow: linesToList(allowText), deny: linesToList(denyText) }, (changed) =>
+      changed === 0 ? "Rules saved — no tool changed status" : `Rules saved — ${changed} tool${changed === 1 ? "" : "s"} changed status`,
+    );
 
   const byNamespace = new Map<string, ToolInfo[]>();
   for (const t of tools) {
@@ -499,113 +633,141 @@ function PolicyPanel() {
     byNamespace.set(ns, [...(byNamespace.get(ns) ?? []), t]);
   }
   const blockedCount = tools.filter((t) => t.verdict === "deny").length;
+  const limitDirty = limit.trim() !== (policy.rateLimitPerMinute === null ? "" : String(policy.rateLimitPerMinute));
+  const rulesDirty = allowText !== policy.allow.join("\n") || denyText !== policy.deny.join("\n");
 
   return (
     <>
-      {status !== null && <div className={`banner ${status.kind}`}>{status.text}</div>}
+      <div className="tiles three">
+        <Tile label="Tools available" value={tools.length - blockedCount} tone="allow" hint={`of ${tools.length}`} />
+        <Tile label="Tools blocked" value={blockedCount} tone="deny" />
+        <Tile label="Rate limit" value={policy.rateLimitPerMinute === null ? "None" : `${policy.rateLimitPerMinute}/min`} tone="throttle" hint="per API key" />
+      </div>
 
-      <Card title="Rate limit" subtitle="Maximum tool calls per minute, for each API key. Blank means unlimited.">
-        <div className="row">
-          <input className="input narrow" inputMode="numeric" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Unlimited" />
-          <span className="muted">calls / minute / key</span>
-          <button className="btn primary" onClick={() => void saveLimit()}>
-            Save limit
-          </button>
-        </div>
-      </Card>
+      <div className="split">
+        <Card title="Tools" subtitle={`${tools.length} tools from ${byNamespace.size} upstream servers. Changes apply to the next call.`} className="grow-card">
+          {[...byNamespace.entries()].map(([ns, list]) => (
+            <div key={ns} className="tool-group">
+              <h3 className="mono">{ns}</h3>
+              <ul className="tool-list">
+                {list.map((t) => {
+                  const explicit = policy.deny.includes(t.name);
+                  // Blocked by a pattern or the allowlist, not by its own switch: the switch can't undo that.
+                  const lockedByRule = t.verdict === "deny" && !explicit;
+                  const classes = ["tool", t.verdict === "deny" ? "blocked" : "", flash.has(t.name) ? "flash" : ""].join(" ");
+                  return (
+                    <li key={t.name} className={classes}>
+                      <div className="tool-text">
+                        <span className="mono tool-name">{t.name}</span>
+                        <span className="muted tool-desc" title={lockedByRule ? (t.reason ?? "") : t.description}>
+                          {lockedByRule ? t.reason : t.description}
+                        </span>
+                      </div>
+                      <label className={lockedByRule ? "switch disabled" : "switch"} title={lockedByRule ? "Blocked by an advanced rule" : undefined}>
+                        <input
+                          type="checkbox"
+                          checked={t.verdict === "allow"}
+                          disabled={lockedByRule || busyTool === t.name}
+                          onChange={() => void toggle(t)}
+                          aria-label={`${t.verdict === "allow" ? "Block" : "Allow"} ${t.name}`}
+                        />
+                        <span className="track" />
+                        <span className="switch-label">{busyTool === t.name ? "Saving…" : t.verdict === "allow" ? "Allowed" : "Blocked"}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </Card>
 
-      <Card title="Tools" subtitle={`${tools.length} tools from ${byNamespace.size} upstream servers · ${blockedCount} blocked. Changes apply to the next call.`}>
-        {[...byNamespace.entries()].map(([ns, list]) => (
-          <div key={ns} className="tool-group">
-            <h3 className="mono">{ns}</h3>
-            <ul className="tool-list">
-              {list.map((t) => {
-                const explicit = policy.deny.includes(t.name);
-                // Blocked by a pattern or the allowlist, not by its own switch: the switch can't undo that.
-                const lockedByRule = t.verdict === "deny" && !explicit;
-                return (
-                  <li key={t.name} className={t.verdict === "deny" ? "tool blocked" : "tool"}>
-                    <div className="tool-text">
-                      <span className="mono tool-name">{t.name}</span>
-                      <span className="muted tool-desc">{lockedByRule ? t.reason : t.description}</span>
-                    </div>
-                    <label className={lockedByRule ? "switch disabled" : "switch"} title={lockedByRule ? "Blocked by an advanced rule below" : undefined}>
-                      <input
-                        type="checkbox"
-                        checked={t.verdict === "allow"}
-                        disabled={lockedByRule || busyTool === t.name}
-                        onChange={() => void toggle(t)}
-                        aria-label={`${t.verdict === "allow" ? "Block" : "Allow"} ${t.name}`}
-                      />
-                      <span className="track" />
-                      <span className="switch-label">{t.verdict === "allow" ? "Allowed" : "Blocked"}</span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
-      </Card>
+        <div className="stack">
+          <Card title="Rate limit" subtitle="Maximum tool calls per minute, for each API key.">
+            <div className="row">
+              <input className="input narrow" inputMode="numeric" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Unlimited" aria-label="Calls per minute" />
+              <span className="muted">calls / min</span>
+            </div>
+            <div className="row actions-row">
+              <SaveButton onSave={saveLimit}>Save limit</SaveButton>
+              {limitDirty && <span className="unsaved">Unsaved change</span>}
+            </div>
+          </Card>
 
-      <details className="card advanced">
-        <summary>
-          <h2>Advanced rules</h2>
-          <span className="muted">Patterns: <code>*</code> every tool, <code>fs.*</code> a whole server, or an exact name. Deny always wins.</span>
-        </summary>
-        <div className="grid two">
-          <label className="field">
-            <span>Allow only these (empty = allow everything)</span>
-            <textarea value={allowText} onChange={(e) => setAllowText(e.target.value)} placeholder={"everything.*\nfs.read_file"} />
-          </label>
-          <label className="field">
-            <span>Always block these</span>
-            <textarea value={denyText} onChange={(e) => setDenyText(e.target.value)} placeholder="fs.write_file" />
-          </label>
+          <Card title="Advanced rules" subtitle={<>Patterns: <code>*</code> all tools, <code>fs.*</code> a whole server, or an exact name. Deny always wins.</>}>
+            <label className="field">
+              <span>Allow only these (empty = allow everything)</span>
+              <textarea value={allowText} onChange={(e) => setAllowText(e.target.value)} placeholder={"everything.*\nfs.read_file"} />
+            </label>
+            <label className="field">
+              <span>Always block these</span>
+              <textarea value={denyText} onChange={(e) => setDenyText(e.target.value)} placeholder="fs.write_file" />
+            </label>
+            <div className="row actions-row">
+              <SaveButton onSave={saveRules}>Save rules</SaveButton>
+              {rulesDirty && <span className="unsaved">Unsaved changes</span>}
+            </div>
+
+            <div className="active-rules">
+              <span className="muted small-label">Active now</span>
+              {policy.allow.length === 0 && policy.deny.length === 0 ? (
+                <span className="muted">No rules — every tool is allowed.</span>
+              ) : (
+                <div className="rule-chips">
+                  {policy.allow.map((p) => (
+                    <span key={`a-${p}`} className="rule-chip allow">allow {p}</span>
+                  ))}
+                  {policy.deny.map((p) => (
+                    <span key={`d-${p}`} className="rule-chip deny">block {p}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
         </div>
-        <div className="row">
-          <button className="btn primary" onClick={() => void save({ ...policy, allow: linesToList(allowText), deny: linesToList(denyText) }, "Rules saved.")}>
-            Save rules
-          </button>
-        </div>
-      </details>
+      </div>
     </>
   );
 }
 
-/* -------------------------------------------------------------------- keys */
+/* ------------------------------------------------------------------- keys */
 
 function KeysPanel() {
+  const toast = useToast();
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
   const [name, setName] = useState("");
   const [created, setCreated] = useState<{ key: string; name: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const now = useNow(30_000);
 
-  const load = useCallback(() => api.keys().then(setKeys).catch(() => setError("Could not load keys.")), []);
+  const load = useCallback(() => api.keys().then(setKeys).catch(() => toast("error", "Could not load keys.")), [toast]);
   useEffect(() => {
     void load();
   }, [load]);
 
   const create = async () => {
     if (name.trim() === "") {
-      setError("Give the key a name, such as “Cursor on my laptop”.");
+      toast("error", "Give the key a name, such as “Cursor on my laptop”.");
       return;
     }
     try {
       const result = await api.createKey(name.trim());
       setCreated({ key: result.key, name: result.apiKey.name });
       setName("");
-      setError(null);
+      toast("success", `Key “${result.apiKey.name}” created`);
       await load();
     } catch (err) {
-      setError(errorText(err, "Could not create the key."));
+      toast("error", errorText(err, "Could not create the key."));
     }
   };
 
   const revoke = async (k: ApiKey) => {
     if (!confirm(`Revoke “${k.name}”? Any agent using it is refused immediately. This cannot be undone.`)) return;
-    await api.revokeKey(k.id).catch(() => setError("Could not revoke the key."));
+    try {
+      await api.revokeKey(k.id);
+      toast("success", `Key “${k.name}” revoked`);
+    } catch {
+      toast("error", "Could not revoke the key.");
+    }
     await load();
   };
 
@@ -645,15 +807,10 @@ function KeysPanel() {
             Create key
           </button>
         </form>
-        {error !== null && <p className="error">{error}</p>}
       </Card>
 
       <Card title="Active keys" subtitle={keys === null ? "Loading…" : `${active.length} active`}>
-        {keys !== null && active.length === 0 ? (
-          <p className="empty muted">No active keys. Create one above.</p>
-        ) : (
-          <KeyTable keys={active} now={now} onRevoke={(k) => void revoke(k)} />
-        )}
+        {keys !== null && active.length === 0 ? <p className="empty muted">No active keys. Create one above.</p> : <KeyTable keys={active} now={now} onRevoke={(k) => void revoke(k)} />}
       </Card>
 
       {revoked.length > 0 && (
@@ -674,7 +831,7 @@ function KeyTable({ keys, now, onRevoke }: { keys: ApiKey[]; now: number; onRevo
             <th>Name</th>
             <th>Key</th>
             <th>Created</th>
-            <th>{onRevoke === undefined ? "Revoked" : ""}</th>
+            <th className="right">{onRevoke === undefined ? "Revoked" : ""}</th>
           </tr>
         </thead>
         <tbody>
@@ -702,45 +859,41 @@ function KeyTable({ keys, now, onRevoke }: { keys: ApiKey[]; now: number; onRevo
   );
 }
 
-/* ----------------------------------------------------------------- connect */
+/* ---------------------------------------------------------------- connect */
 
 function ConnectPanel() {
-  const config = JSON.stringify(
-    { mcpServers: { warden: { url: MCP_URL, headers: { Authorization: "Bearer wdn_YOUR_KEY_HERE" } } } },
-    null,
-    2,
-  );
+  const config = JSON.stringify({ mcpServers: { warden: { url: MCP_URL, headers: { Authorization: "Bearer wdn_YOUR_KEY_HERE" } } } }, null, 2);
 
   return (
-    <>
-      <Card title="Endpoint" subtitle="Agents connect here over Streamable HTTP, with an API key in the Authorization header.">
-        <div className="secret">
-          <code className="mono">{MCP_URL}</code>
-          <CopyButton text={MCP_URL} />
-        </div>
-      </Card>
-
-      <Card title="Client configuration" subtitle="Most MCP clients that support remote servers accept a block like this. Replace the key with one from the API keys tab.">
+    <div className="split even">
+      <div className="stack">
+        <Card title="Endpoint" subtitle="Agents connect over Streamable HTTP, with an API key in the Authorization header.">
+          <div className="secret">
+            <code className="mono">{MCP_URL}</code>
+            <CopyButton text={MCP_URL} />
+          </div>
+        </Card>
+        <Card title="Try it with the MCP Inspector">
+          <ol className="steps">
+            <li>
+              Run <code>npx @modelcontextprotocol/inspector@latest</code>
+            </li>
+            <li>
+              Add a server: transport <strong>Streamable HTTP</strong>, URL <code>{MCP_URL}</code>
+            </li>
+            <li>
+              Add the header <code>Authorization</code> with the value <code>Bearer wdn_…</code>
+            </li>
+            <li>Connect, open Tools, and run any tool — it appears on the Overview within 2 seconds.</li>
+          </ol>
+        </Card>
+      </div>
+      <Card title="Client configuration" subtitle="Most MCP clients that support remote servers accept a block like this. Replace the key with one from API keys.">
         <div className="code-block">
           <pre className="mono">{config}</pre>
           <CopyButton text={config} />
         </div>
       </Card>
-
-      <Card title="Try it with the MCP Inspector">
-        <ol className="steps">
-          <li>
-            Run <code>npx @modelcontextprotocol/inspector@latest</code>
-          </li>
-          <li>
-            Add a server: transport <strong>Streamable HTTP</strong>, URL <code>{MCP_URL}</code>
-          </li>
-          <li>
-            Add the header <code>Authorization</code> with the value <code>Bearer wdn_…</code>
-          </li>
-          <li>Connect, open Tools, and run any tool — it appears on the Overview tab within 2 seconds.</li>
-        </ol>
-      </Card>
-    </>
+    </div>
   );
 }
