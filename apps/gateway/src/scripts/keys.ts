@@ -39,6 +39,7 @@ if (command === "create") {
     hash,
     createdAt: new Date().toISOString(),
     revokedAt: null,
+    expiresAt: null,
   });
 
   console.log(`created ${id} for tenant ${tenantId}`);

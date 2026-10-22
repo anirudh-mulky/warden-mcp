@@ -1,6 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import { jwtVerify, SignJWT } from "jose";
+import type { Collection } from "mongodb";
 import type { TenantId } from "@warden/shared";
+import type { UserDoc } from "../db/mongo.js";
 import { jwtSecret } from "../env.js";
 
 /**
@@ -15,8 +17,12 @@ import { jwtSecret } from "../env.js";
  *                forgery against the dashboard API.
  *  - Secure whenever the site is served over HTTPS.
  *
- * API keys (for agents) and sessions (for humans) are separate on purpose:
- * a leaked agent key cannot open the dashboard, and vice versa.
+ * Revocation: a signature alone can't be "un-signed", so a stolen or stale
+ * token would keep working until it expires. Each token therefore carries
+ * the user's sessionVersion, and every request checks it against the
+ * database. "Sign out everywhere" bumps the version, and deleting a user
+ * removes the row — either way, every outstanding token dies at once.
+ * The cost is one indexed lookup per dashboard request (not per agent call).
  */
 
 export interface SessionUser {
@@ -29,8 +35,8 @@ const COOKIE = "warden_session";
 const LIFETIME_SECONDS = 12 * 60 * 60;
 const key = new TextEncoder().encode(jwtSecret);
 
-export async function startSession(res: Response, user: SessionUser): Promise<void> {
-  const token = await new SignJWT({ email: user.email, tenantId: user.tenantId })
+export async function startSession(res: Response, user: SessionUser, sessionVersion: number): Promise<void> {
+  const token = await new SignJWT({ email: user.email, tenantId: user.tenantId, sv: sessionVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(user.userId)
     .setIssuedAt()
@@ -41,8 +47,8 @@ export async function startSession(res: Response, user: SessionUser): Promise<vo
     httpOnly: true,
     sameSite: "strict",
     // Secure exactly when the request arrived over HTTPS (directly, or via a
-    // proxy's X-Forwarded-Proto — app.ts trusts the proxy). On plain
-    // http://localhost a Secure cookie would be refused by some browsers.
+    // trusted proxy's X-Forwarded-Proto). On plain http://localhost a Secure
+    // cookie would be refused by some browsers.
     secure: res.req.secure,
     maxAge: LIFETIME_SECONDS * 1000,
     path: "/",
@@ -62,8 +68,8 @@ function readCookie(req: Request, name: string): string | undefined {
   return undefined;
 }
 
-/** Lets a request through only with a valid, unexpired session cookie. */
-export function requireSession() {
+/** Lets a request through only with a valid, unexpired, unrevoked session cookie. */
+export function requireSession(users: Pick<Collection<UserDoc>, "findOne">) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const token = readCookie(req, COOKIE);
     if (token !== undefined) {
@@ -71,10 +77,13 @@ export function requireSession() {
         // algorithms is pinned: never let the token choose how it is checked.
         const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
         if (typeof payload.sub === "string" && typeof payload.email === "string" && typeof payload.tenantId === "string") {
-          const user: SessionUser = { userId: payload.sub, email: payload.email, tenantId: payload.tenantId as TenantId };
-          res.locals.user = user;
-          next();
-          return;
+          const row = await users.findOne({ id: payload.sub }, { projection: { sessionVersion: 1 } });
+          if (row !== null && (row.sessionVersion ?? 0) === (typeof payload.sv === "number" ? payload.sv : 0)) {
+            const user: SessionUser = { userId: payload.sub, email: payload.email, tenantId: payload.tenantId as TenantId };
+            res.locals.user = user;
+            next();
+            return;
+          }
         }
       } catch {
         // expired, tampered with, or signed with a different secret — fall through

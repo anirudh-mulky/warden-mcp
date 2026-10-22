@@ -52,6 +52,12 @@ export function requireApiKey(store: KeyStore) {
       return;
     }
 
+    if (stored.expiresAt !== null && Date.parse(stored.expiresAt) <= Date.now()) {
+      logger.info({ apiKeyId: stored.id, tenantId: stored.tenantId, expiresAt: stored.expiresAt }, "auth rejected: expired key");
+      reject(res);
+      return;
+    }
+
     const caller: Caller = { tenantId: stored.tenantId, apiKeyId: stored.id };
     res.locals.caller = caller;
     next();

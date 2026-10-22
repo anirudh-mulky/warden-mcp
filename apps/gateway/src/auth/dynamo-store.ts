@@ -11,12 +11,17 @@ import type { KeyAdmin, StoredApiKey } from "./store.js";
  * "hash" is a DynamoDB reserved word, so expressions refer to it through the
  * placeholder "#h" instead of writing it directly.
  */
+/** Keys stored before expiry existed have no expiresAt; they never expire. */
+function normalise(item: Record<string, unknown>): StoredApiKey {
+  return { expiresAt: null, ...item } as StoredApiKey;
+}
+
 export class DynamoKeyStore implements KeyAdmin {
   private readonly table = TABLES.apiKeys;
 
   async findByHash(hash: string): Promise<StoredApiKey | null> {
     const result = await dynamo.send(new GetCommand({ TableName: this.table, Key: { hash } }));
-    return (result.Item as StoredApiKey | undefined) ?? null;
+    return result.Item === undefined ? null : normalise(result.Item);
   }
 
   async put(key: StoredApiKey): Promise<void> {
@@ -47,7 +52,7 @@ export class DynamoKeyStore implements KeyAdmin {
     let cursor: Record<string, unknown> | undefined;
     do {
       const page = await dynamo.send(new ScanCommand({ TableName: this.table, ExclusiveStartKey: cursor }));
-      keys.push(...((page.Items ?? []) as StoredApiKey[]));
+      keys.push(...(page.Items ?? []).map(normalise));
       cursor = page.LastEvaluatedKey;
     } while (cursor !== undefined);
     return keys;

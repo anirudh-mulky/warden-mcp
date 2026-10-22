@@ -91,6 +91,11 @@ export class UpstreamPool {
     logger.info({ healthy, total: this.upstreams.size }, "upstream pool ready");
   }
 
+  /** Is this a built-in namespace? (Anything else may be a tenant's custom upstream.) */
+  has(namespace: string): boolean {
+    return this.upstreams.has(namespace);
+  }
+
   /** What every upstream is doing right now. Rendered by GET /readyz. */
   health(): UpstreamHealth[] {
     return [...this.upstreams.values()].map((u) => ({

@@ -1,6 +1,9 @@
 import type { Express } from "express";
 import type { ApiKeyId, TenantId } from "@warden/shared";
+import { Alerter, SettingsStore } from "./alerts/alerter.js";
 import { buildApp } from "./app.js";
+import { ApprovalStore } from "./approvals/store.js";
+import { AuditLog } from "./audit/log.js";
 import { DynamoKeyStore } from "./auth/dynamo-store.js";
 import { hashApiKey } from "./auth/keys.js";
 import type { KeyStore } from "./auth/store.js";
@@ -11,11 +14,12 @@ import { UpstreamPool } from "./mcp/pool.js";
 import { DynamoRateLimiter } from "./policy/rate-limit.js";
 import { PolicyStore } from "./policy/store.js";
 import { CallRecorder } from "./telemetry/recorder.js";
+import { TenantUpstreams } from "./upstreams/tenant.js";
 
 export interface Warden {
   app: Express;
   recorder: CallRecorder;
-  /** Stop upstream processes and close database connections. */
+  /** Stop upstream processes, background timers and database connections. */
   close(): Promise<void>;
 }
 
@@ -26,8 +30,8 @@ export interface Warden {
  * Order matters: connect to everything FIRST, so no request can arrive
  * before the gateway is able to answer it.
  */
-export async function createWarden(): Promise<Warden> {
-  const collections = await connectMongo().catch((err: unknown) => {
+export async function createWarden(options: { watchUpstreams?: boolean } = {}): Promise<Warden> {
+  const c = await connectMongo().catch((err: unknown) => {
     logger.fatal({ err }, "cannot reach MongoDB — locally, is Docker running? (pnpm infra:up)");
     throw err;
   });
@@ -38,21 +42,33 @@ export async function createWarden(): Promise<Warden> {
   const keyStore = new DynamoKeyStore();
   await seedDevKey(keyStore);
 
-  const recorder = new CallRecorder(collections.calls);
+  const recorder = new CallRecorder(c.calls);
+  const settings = new SettingsStore(c.settings);
+  const alerter = new Alerter(settings, c.calls);
+  if (options.watchUpstreams !== false) alerter.watchUpstreams(pool);
+  const tenantUpstreams = new TenantUpstreams(c.upstreams);
+
   const app = buildApp({
     pool,
+    tenantUpstreams,
     keyStore,
-    users: collections.users,
-    policies: new PolicyStore(collections.policies),
+    users: c.users,
+    policies: new PolicyStore(c.policies),
     rateLimiter: new DynamoRateLimiter(),
     recorder,
+    approvals: new ApprovalStore(c.approvals),
+    audit: new AuditLog(c.audit),
+    settings,
+    alerter,
   });
 
   return {
     app,
     recorder,
     async close() {
+      alerter.stop();
       await recorder.flush();
+      await tenantUpstreams.closeAll();
       await pool.closeAll();
       await mongoClient.close();
     },
@@ -79,6 +95,7 @@ async function seedDevKey(store: KeyStore): Promise<void> {
     hash,
     createdAt: new Date().toISOString(),
     revokedAt: null,
+    expiresAt: null,
   });
   // The prefix only — never the key itself.
   logger.info({ prefix: devKey.slice(0, 8), tenantId: "tenant_dev" }, "seeded development API key");

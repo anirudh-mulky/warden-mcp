@@ -3,17 +3,27 @@ import { Router, type Request, type Response } from "express";
 import type { Collection } from "mongodb";
 import { z } from "zod";
 import type { TenantId } from "@warden/shared";
+import type { AuditLog } from "../audit/log.js";
 import { DUMMY_HASH, hashPassword, verifyPassword } from "../auth/passwords.js";
 import { endSession, startSession } from "../auth/session.js";
 import type { UserDoc } from "../db/mongo.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
+import type { RateLimiter } from "../policy/rate-limit.js";
 
 /**
  * Sign-up, log-in, log-out. The only /api routes that work without a session.
  *
  * Every sign-up creates a new tenant, owned by that user: one account, one
  * tenant. (Teams and invitations are deliberately out of scope.)
+ *
+ * Brute-force protection: scrypt makes each guess slow, but nothing stops
+ * an attacker from simply making many guesses. So attempts are counted in
+ * DynamoDB, per IP and per email address:
+ *   - per IP    20 sign-in attempts / 10 min, 10 sign-ups / hour
+ *   - per email  8 sign-in attempts / 10 min
+ * The per-email limit is what really protects an account — an attacker can
+ * rotate IPs, but not the address they are trying to break into.
  */
 const credentials = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
@@ -27,10 +37,35 @@ function sameSecret(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
-export function authRouter(users: Collection<UserDoc>): Router {
+export interface AuthDeps {
+  users: Collection<UserDoc>;
+  rateLimiter: RateLimiter;
+  audit: AuditLog;
+}
+
+export function authRouter({ users, rateLimiter, audit }: AuthDeps): Router {
   const router = Router();
 
+  /** True if under every limit. If the limiter itself is down, allow (fail open) and say so. */
+  const underLimits = async (checks: [bucket: string, limit: number, windowSeconds: number][]): Promise<boolean> => {
+    try {
+      for (const [bucket, limit, window] of checks) if (!(await rateLimiter.take(bucket, limit, window))) return false;
+      return true;
+    } catch (err) {
+      logger.warn({ err }, "login rate limiter unavailable, allowing attempt");
+      return true;
+    }
+  };
+  const tooMany = (res: Response, seconds: number) => {
+    res.set("Retry-After", String(seconds));
+    res.status(429).json({ error: "rate_limited", message: "Too many attempts. Wait a few minutes and try again." });
+  };
+
   router.post("/api/auth/signup", async (req: Request, res: Response) => {
+    if (env.RATE_LIMIT_AUTH_BY_IP && !(await underLimits([[`signup-ip:${req.ip}`, 10, 3600]]))) {
+      tooMany(res, 3600);
+      return;
+    }
     const parsed = signup.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid", message: z.prettifyError(parsed.error) });
@@ -38,7 +73,7 @@ export function authRouter(users: Collection<UserDoc>): Router {
     }
     const { email, password, signupCode } = parsed.data;
 
-    // On a public deployment, an open sign-up page would let anyone use
+    // On a shared deployment, an open sign-up page would let anyone use
     // your upstreams. SIGNUP_CODE turns sign-up into invitation-only.
     if (env.SIGNUP_CODE !== undefined && (signupCode === undefined || !sameSecret(signupCode, env.SIGNUP_CODE))) {
       res.status(403).json({ error: "forbidden", message: "A valid sign-up code is required." });
@@ -51,6 +86,7 @@ export function authRouter(users: Collection<UserDoc>): Router {
       passwordHash: await hashPassword(password),
       tenantId: `t_${randomBytes(6).toString("hex")}` as TenantId,
       createdAt: new Date().toISOString(),
+      sessionVersion: 0,
     };
     try {
       await users.insertOne({ ...user });
@@ -64,14 +100,24 @@ export function authRouter(users: Collection<UserDoc>): Router {
     }
 
     logger.info({ userId: user.id, tenantId: user.tenantId }, "user signed up");
-    await startSession(res, { userId: user.id, email, tenantId: user.tenantId });
+    audit.record(user.tenantId, email, "account.create", email);
+    await startSession(res, { userId: user.id, email, tenantId: user.tenantId }, 0);
     res.status(201).json({ email, tenantId: user.tenantId });
   });
 
   router.post("/api/auth/login", async (req: Request, res: Response) => {
     const parsed = credentials.safeParse(req.body);
-    const user = parsed.success ? await users.findOne({ email: parsed.data.email }) : null;
+    const email = parsed.success ? parsed.data.email : "";
+    const checks: [string, number, number][] = [];
+    if (env.RATE_LIMIT_AUTH_BY_IP) checks.push([`login-ip:${req.ip}`, 20, 600]);
+    if (email !== "") checks.push([`login-email:${email}`, 8, 600]);
+    if (!(await underLimits(checks))) {
+      logger.warn({ ip: req.ip }, "login rate limited");
+      tooMany(res, 600);
+      return;
+    }
 
+    const user = parsed.success ? await users.findOne({ email }) : null;
     // Always run one scrypt verification, real or dummy, so a missing
     // account takes as long as a wrong password. Same message either way.
     const ok = await verifyPassword(parsed.success ? parsed.data.password : "", user?.passwordHash ?? (await DUMMY_HASH));
@@ -80,7 +126,8 @@ export function authRouter(users: Collection<UserDoc>): Router {
       return;
     }
 
-    await startSession(res, { userId: user.id, email: user.email, tenantId: user.tenantId });
+    audit.record(user.tenantId, user.email, "session.login", user.email);
+    await startSession(res, { userId: user.id, email: user.email, tenantId: user.tenantId }, user.sessionVersion ?? 0);
     res.json({ email: user.email, tenantId: user.tenantId });
   });
 

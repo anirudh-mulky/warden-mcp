@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "NODE_ENV=test LOG_LEVEL=fatal tsx --test \"src/**/*.test.ts\"",
-    "test:integration": "NODE_ENV=test LOG_LEVEL=fatal tsx --env-file-if-exists=.env --test \"src/**/*.itest.ts\"",
+    "test:integration": "NODE_ENV=test LOG_LEVEL=fatal ALLOW_PRIVATE_NETWORK_TARGETS=true APPROVAL_TIMEOUT_MS=3000 RATE_LIMIT_AUTH_BY_IP=false tsx --env-file-if-exists=.env --test --test-concurrency=1 \"src/**/*.itest.ts\"",
     "db:setup": "tsx --env-file-if-exists=.env src/scripts/create-tables.ts",
     "keys": "tsx --env-file-if-exists=.env src/scripts/keys.ts",
     "bench": "LOG_LEVEL=warn tsx --env-file-if-exists=.env src/scripts/bench.ts"

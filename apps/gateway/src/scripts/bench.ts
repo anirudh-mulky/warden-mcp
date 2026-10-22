@@ -63,7 +63,8 @@ async function timeCalls(client: Client, n: number): Promise<number[]> {
 const tenantId = `bench_${randomBytes(4).toString("hex")}` as TenantId;
 const { key, prefix, hash } = generateApiKey();
 const keyStore = new DynamoKeyStore();
-await keyStore.put({ id: "key_bench" as ApiKeyId, tenantId, name: "benchmark", prefix, hash, createdAt: new Date().toISOString(), revokedAt: null });
+await keyStore.put({ id: "key_bench" as ApiKeyId, tenantId, name: "benchmark", prefix, hash, createdAt: new Date().toISOString(), revokedAt: null, expiresAt: null });
+const openPolicy = { allow: [], deny: [], rateLimitPerMinute: null, argRules: [], approval: [], redactSecrets: false, redactEmails: false };
 
 const warden = await createWarden();
 const server = warden.app.listen(0);
@@ -96,10 +97,10 @@ try {
   const base = summarise(await timeCalls(directAsNamespaced, CALLS));
   const viaWarden = summarise(await timeCalls(client, CALLS));
 
-  await policies.put(tenantId, { allow: [], deny: [], rateLimitPerMinute: 1_000_000 });
+  await policies.put(tenantId, null, { ...openPolicy, rateLimitPerMinute: 1_000_000 });
   await timeCalls(client, WARMUP);
   const withLimit = summarise(await timeCalls(client, CALLS));
-  await policies.put(tenantId, { allow: [], deny: [], rateLimitPerMinute: null });
+  await policies.put(tenantId, null, openPolicy);
 
   console.log(`timing ${CALLS} calls across ${CONCURRENCY} concurrent clients…`);
   const workers = await Promise.all(Array.from({ length: CONCURRENCY }, () => wardenClient()));

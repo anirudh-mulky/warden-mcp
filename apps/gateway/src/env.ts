@@ -48,6 +48,27 @@ const envSchema = z.object({
   DASHBOARD_DIR: z.string().optional(),
   /** Directory the filesystem upstream may touch. Defaults to the repo's sandbox/. */
   FS_SANDBOX_DIR: z.string().optional(),
+
+  /**
+   * Believe X-Forwarded-For / X-Forwarded-Proto. Only true behind a proxy you
+   * control: otherwise anyone can fake their IP and walk around the login
+   * rate limit by sending a different header on every attempt.
+   */
+  TRUST_PROXY: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  /**
+   * Let webhooks and custom upstreams target private/internal addresses
+   * (localhost, 10.x, 192.168.x, cloud metadata...). Off by default: a
+   * user-supplied URL that reaches internal services is SSRF.
+   */
+  ALLOW_PRIVATE_NETWORK_TARGETS: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  /**
+   * Per-IP limits on sign-in and sign-up. On by default. The integration
+   * tests turn it off because every test request comes from one address;
+   * the per-email limit (the one that protects accounts) stays on regardless.
+   */
+  RATE_LIMIT_AUTH_BY_IP: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  /** How long a call needing approval waits for a human. Below MCP clients' usual 60s timeout. */
+  APPROVAL_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(55_000).default(45_000),
 })
   .refine((e) => e.NODE_ENV !== "production" || e.JWT_SECRET !== undefined, {
     message: "JWT_SECRET must be set in production",

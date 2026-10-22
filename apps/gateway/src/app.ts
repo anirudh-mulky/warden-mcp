@@ -7,7 +7,8 @@ import { pinoHttp } from "pino-http";
 import type { Collection } from "mongodb";
 import type { HealthResponse, ReadyResponse } from "@warden/shared";
 import { authRouter } from "./api/auth.js";
-import { apiRouter } from "./api/routes.js";
+import { apiRouter, type ApiDeps } from "./api/routes.js";
+import type { AuditLog } from "./audit/log.js";
 import { requireApiKey } from "./auth/middleware.js";
 import { requireSession } from "./auth/session.js";
 import type { KeyAdmin } from "./auth/store.js";
@@ -21,9 +22,10 @@ const startedAt = Date.now();
 const VERSION = "0.0.0";
 
 /** Everything the app needs from the outside world, passed in explicitly. */
-export interface AppDeps extends McpDeps {
+export interface AppDeps extends McpDeps, ApiDeps {
   keyStore: KeyAdmin;
   users: Collection<UserDoc>;
+  audit: AuditLog;
 }
 
 /**
@@ -40,7 +42,9 @@ export interface AppDeps extends McpDeps {
 export function buildApp(deps: AppDeps): Express {
   const app = express();
 
-  app.set("trust proxy", true);
+  // Off unless configured: trusting X-Forwarded-For from anyone would let a
+  // client fake its IP on every request and dodge the login rate limit.
+  app.set("trust proxy", env.TRUST_PROXY);
   app.use(pinoHttp({ logger }));
   app.use(express.json({ limit: "1mb" }));
 
@@ -72,8 +76,8 @@ export function buildApp(deps: AppDeps): Express {
 
   // Humans. Sign-up and log-in are mounted BEFORE the session check —
   // you cannot need a session to get a session.
-  app.use(authRouter(deps.users));
-  app.use("/api", requireSession());
+  app.use(authRouter({ users: deps.users, rateLimiter: deps.rateLimiter, audit: deps.audit }));
+  app.use("/api", requireSession(deps.users));
   app.use(apiRouter(deps));
   app.use("/api", (req: Request, res: Response) => {
     res.status(404).json({ error: "not_found", path: req.originalUrl });

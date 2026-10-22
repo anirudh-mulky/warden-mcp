@@ -60,6 +60,16 @@ export class CallRecorder {
     return docs as ToolCallRecord[];
   }
 
+  /** Calls between two ISO times (either may be open), newest first — for export. */
+  async range(tenantId: TenantId, from: string | undefined, to: string | undefined, limit: number): Promise<ToolCallRecord[]> {
+    const startedAt: Record<string, string> = {};
+    if (from !== undefined) startedAt.$gte = from;
+    if (to !== undefined) startedAt.$lte = to;
+    const filter = Object.keys(startedAt).length === 0 ? { tenantId } : { tenantId, startedAt };
+    const docs = await this.calls.find(filter, { projection: { _id: 0 } }).sort({ startedAt: -1 }).limit(limit).toArray();
+    return docs as ToolCallRecord[];
+  }
+
   /** Per-tool counts and latency percentiles over the tenant's last `window` calls. */
   async stats(tenantId: TenantId, window = 500): Promise<ToolStats[]> {
     const byTool = new Map<string, ToolCallRecord[]>();
