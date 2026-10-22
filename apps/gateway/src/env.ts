@@ -18,7 +18,18 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   MONGODB_URI: z.string().url().default("mongodb://localhost:27017/warden"),
-  DYNAMODB_ENDPOINT: z.string().url().optional(),
+  /**
+   * ALWAYS a local DynamoDB (DynamoDB Local in Docker). Warden is designed to
+   * cost nothing, so it never talks to real AWS: this is required in every
+   * environment, and an amazonaws.com address is refused outright.
+   */
+  DYNAMODB_ENDPOINT: z
+    .string()
+    .url()
+    .default("http://localhost:8000")
+    .refine((url) => !new URL(url).hostname.endsWith("amazonaws.com"), {
+      message: "Warden only runs against a local DynamoDB; real AWS endpoints are refused so it can never cost money",
+    }),
   AWS_REGION: z.string().default("us-east-1"),
   DYNAMODB_TABLE_API_KEYS: z.string().default("warden-api-keys"),
   DYNAMODB_TABLE_RATE_LIMITS: z.string().default("warden-rate-limits"),
@@ -27,16 +38,21 @@ const envSchema = z.object({
     .string()
     .refine(looksLikeApiKey, "must be a Warden API key: wdn_ followed by 43 characters")
     .optional(),
-}).refine(
-  // Safety lock: in development, DynamoDB must point at the local copy in
-  // Docker. Without this, a missing DYNAMODB_ENDPOINT would send requests
-  // to real AWS — which costs money and touches real data.
-  (e) => e.NODE_ENV !== "development" || e.DYNAMODB_ENDPOINT !== undefined,
-  {
-    message: "DYNAMODB_ENDPOINT must be set in development (e.g. http://localhost:8000)",
-    path: ["DYNAMODB_ENDPOINT"],
-  },
-);
+
+  /** Signs dashboard session tokens. Required, and at least 32 chars, in production. */
+  JWT_SECRET: z.string().min(32).optional(),
+  /** If set, sign-up requires this code — invitation-only accounts. */
+  // A blank value (e.g. SIGNUP_CODE= in a compose file) means "not set".
+  SIGNUP_CODE: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(8).optional()),
+  /** If set, the gateway also serves the built dashboard from this directory (the Docker image does). */
+  DASHBOARD_DIR: z.string().optional(),
+  /** Directory the filesystem upstream may touch. Defaults to the repo's sandbox/. */
+  FS_SANDBOX_DIR: z.string().optional(),
+})
+  .refine((e) => e.NODE_ENV !== "production" || e.JWT_SECRET !== undefined, {
+    message: "JWT_SECRET must be set in production",
+    path: ["JWT_SECRET"],
+  });
 
 const parsed = envSchema.safeParse(process.env);
 
@@ -50,3 +66,10 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 export type Env = typeof env;
+
+/**
+ * The session-signing secret. Outside production a fixed, clearly-fake value
+ * is used so development needs no setup; production cannot reach this
+ * fallback because the schema above refuses to start without JWT_SECRET.
+ */
+export const jwtSecret = env.JWT_SECRET ?? "development-only-secret-never-use-in-production";

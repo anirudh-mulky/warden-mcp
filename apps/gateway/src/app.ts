@@ -1,12 +1,18 @@
+import { join } from "node:path";
 import express, { type Express, type Request, type Response } from "express";
 // Named import, not default: pino-http is CommonJS, and under NodeNext its
 // types put the function at `.default`, so a default import type-checks as
 // a non-callable object even though it works at runtime.
 import { pinoHttp } from "pino-http";
+import type { Collection } from "mongodb";
 import type { HealthResponse, ReadyResponse } from "@warden/shared";
+import { authRouter } from "./api/auth.js";
 import { apiRouter } from "./api/routes.js";
 import { requireApiKey } from "./auth/middleware.js";
-import type { KeyStore } from "./auth/store.js";
+import { requireSession } from "./auth/session.js";
+import type { KeyAdmin } from "./auth/store.js";
+import type { UserDoc } from "./db/mongo.js";
+import { env } from "./env.js";
 import { logger } from "./logger.js";
 import { mcpRouter } from "./mcp/route.js";
 import type { McpDeps } from "./mcp/server.js";
@@ -16,19 +22,20 @@ const VERSION = "0.0.0";
 
 /** Everything the app needs from the outside world, passed in explicitly. */
 export interface AppDeps extends McpDeps {
-  keyStore: KeyStore;
+  keyStore: KeyAdmin;
+  users: Collection<UserDoc>;
 }
 
 /**
  * Builds the Express application.
  *
- * Dependencies arrive as an argument rather than being imported. That is
- * what lets Day 12's tests hand in a fake pool that returns canned tools,
- * with no child processes anywhere. A module that reaches out and imports
- * its own dependencies cannot be tested without them.
+ * Dependencies arrive as an argument rather than being imported, which is
+ * what lets the tests hand in in-memory stores. No app.listen() here:
+ * index.ts listens, and the tests listen on a random port.
  *
- * Still no app.listen() here — creating the app and starting the server
- * stay separate jobs.
+ * Two kinds of caller, two kinds of credential:
+ *   /mcp  — AI agents, with an API key       (requireApiKey)
+ *   /api  — humans, with a session cookie    (requireSession)
  */
 export function buildApp(deps: AppDeps): Express {
   const app = express();
@@ -47,33 +54,40 @@ export function buildApp(deps: AppDeps): Express {
   });
 
   /**
-   * Readiness probe. Unlike /healthz this DOES inspect dependencies,
-   * because that is the question it exists to answer.
-   *
-   * Three states, not two. "degraded" is the one people forget to model,
-   * and it is the state a gateway spends most of its bad days in: still
-   * useful, just not whole. Collapsing it into "unhealthy" gets you
-   * restarted for no reason; collapsing it into "healthy" means nobody
-   * ever finds out.
+   * Readiness probe. Unlike /healthz this DOES inspect dependencies.
+   * Three states: "degraded" still serves traffic, so it returns 200;
+   * only "unavailable" (no upstream at all) returns 503.
    */
   app.get("/readyz", (_req: Request, res: Response<ReadyResponse>) => {
     const upstreams = deps.pool.health();
     const healthy = upstreams.filter((u) => u.status === "connected").length;
-
     const status: ReadyResponse["status"] =
       healthy === upstreams.length ? "ready" : healthy === 0 ? "unavailable" : "degraded";
-
-    // 503 only when nothing works at all. A degraded gateway still serves
-    // real traffic and must not be taken out of rotation for it.
     res.status(status === "unavailable" ? 503 : 200).json({ status, upstreams });
   });
 
-  // Everything under /mcp needs a valid key. /healthz and /readyz above
-  // stay open on purpose: AWS health checks cannot carry an API key.
+  // Agents.
   app.use("/mcp", requireApiKey(deps.keyStore));
   app.use(mcpRouter(deps));
-  app.use("/api", requireApiKey(deps.keyStore));
+
+  // Humans. Sign-up and log-in are mounted BEFORE the session check —
+  // you cannot need a session to get a session.
+  app.use(authRouter(deps.users));
+  app.use("/api", requireSession());
   app.use(apiRouter(deps));
+  app.use("/api", (req: Request, res: Response) => {
+    res.status(404).json({ error: "not_found", path: req.originalUrl });
+  });
+
+  // The built dashboard, when there is one (the Docker image). Any other GET falls
+  // back to index.html so the single-page app handles its own routes.
+  if (env.DASHBOARD_DIR !== undefined) {
+    const dir = env.DASHBOARD_DIR;
+    app.use(express.static(dir, { index: "index.html", maxAge: "1h" }));
+    app.get(/^\/(?!mcp|api|healthz|readyz).*/, (_req: Request, res: Response) => {
+      res.sendFile(join(dir, "index.html"));
+    });
+  }
 
   app.use((req: Request, res: Response) => {
     res.status(404).json({ error: "not_found", path: req.path });

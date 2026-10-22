@@ -4,24 +4,16 @@ import {
   ResourceNotFoundException,
 } from "@aws-sdk/client-dynamodb";
 import { dynamo, TABLES } from "../db/dynamo.js";
-import { env } from "../env.js";
 
 /**
- * Creates Warden's DynamoDB tables in DynamoDB Local. Development only.
- *
- * On AWS the tables are created by Terraform (Day 8), never by the app or
- * this script — so this refuses to run unless pointed at a local endpoint.
+ * Creates Warden's tables in DynamoDB Local (env.ts guarantees the endpoint
+ * is local — Warden never talks to real AWS).
  *
  * Idempotent: a table that already exists is left untouched, so running
- * this twice is harmless.
+ * this twice is harmless. The Docker setup runs it on every start.
  *
- * Run with: pnpm --filter @warden/gateway db:setup
+ * Run with: pnpm db:setup
  */
-
-if (env.DYNAMODB_ENDPOINT === undefined) {
-  console.error("Refusing to run: DYNAMODB_ENDPOINT is not set, so this would create tables in real AWS.");
-  process.exit(1);
-}
 
 async function ensureTable(name: string, keyField: string): Promise<void> {
   try {
@@ -41,8 +33,7 @@ async function ensureTable(name: string, keyField: string): Promise<void> {
       AttributeDefinitions: [{ AttributeName: keyField, AttributeType: "S" }],
       // "HASH" is DynamoDB's word for partition key. Unrelated to SHA-256.
       KeySchema: [{ AttributeName: keyField, KeyType: "HASH" }],
-      // Irrelevant locally. Day 8 picks the real billing mode, after we
-      // have checked exactly what the always-free tier covers.
+      // DynamoDB Local requires a billing mode but charges nothing either way.
       BillingMode: "PAY_PER_REQUEST",
     }),
   );

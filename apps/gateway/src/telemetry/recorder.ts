@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { EventEmitter } from "node:events";
 import type { Collection } from "mongodb";
 import type { TenantId, ToolCallRecord, ToolStats } from "@warden/shared";
 import { logger } from "../logger.js";
@@ -14,53 +13,47 @@ export function hashArgs(args: unknown): string {
 }
 
 /**
- * Records every tools/call: persisted to MongoDB, and broadcast to anyone
- * watching the live feed.
+ * Records every tools/call to MongoDB.
  *
- * record() does NOT wait for the database. The agent's response must not be
- * slowed down by our bookkeeping, so the insert runs in the background and
- * a failure is logged rather than failing the call. (On AWS this would be
- * a queue; locally, a background insert gives the same property.)
+ * record() does not make the MCP response wait for the insert: bookkeeping
+ * must not slow the agent down. The insert runs in the background and a
+ * failure is logged, never turned into a failed tool call.
  *
- * The live feed is an in-process EventEmitter, so it only sees calls served
- * by THIS process. Fine for one instance; several instances would need a
- * shared channel (e.g. Mongo change streams or Redis pub/sub).
+ * The recorder remembers unfinished inserts so that shutdown (and the
+ * tests) can await flush() and lose nothing that was already accepted.
  */
 export class CallRecorder {
-  private readonly events = new EventEmitter();
+  private readonly pending = new Set<Promise<void>>();
 
-  constructor(private readonly calls: Collection<ToolCallRecord>) {
-    // One listener per open dashboard tab; don't warn past the default of 10.
-    this.events.setMaxListeners(0);
-  }
+  constructor(private readonly calls: Collection<ToolCallRecord>) {}
 
   record(record: ToolCallRecord): void {
-    this.events.emit("call", record);
     // A copy, because insertOne adds an _id to the object it is given.
-    this.calls.insertOne({ ...record }).catch((err: unknown) => {
-      logger.error({ err, callId: record.id }, "failed to persist call record");
-    });
+    const write: Promise<void> = this.calls
+      .insertOne({ ...record })
+      .then(() => undefined)
+      .catch((err: unknown) => {
+        logger.error({ err, callId: record.id }, "failed to persist call record");
+      })
+      .finally(() => this.pending.delete(write));
+    this.pending.add(write);
   }
 
-  /** Subscribe to new calls. Returns the function that unsubscribes. */
-  subscribe(listener: (record: ToolCallRecord) => void): () => void {
-    this.events.on("call", listener);
-    return () => this.events.off("call", listener);
+  /** Resolves once every insert started so far has finished. */
+  async flush(): Promise<void> {
+    await Promise.all(this.pending);
   }
 
-  /** Tell every live-feed connection to close, so shutdown is not held open. */
-  closeAll(): void {
-    this.events.emit("close");
-  }
-
-  onClose(listener: () => void): () => void {
-    this.events.once("close", listener);
-    return () => this.events.off("close", listener);
-  }
-
-  async recent(tenantId: TenantId, limit: number): Promise<ToolCallRecord[]> {
+  /**
+   * Newest first. With `since`, only calls that started after it — the
+   * dashboard polls with the newest timestamp it has. ISO-8601 strings in
+   * one format sort the same as the times they represent, so a string
+   * comparison is a time comparison.
+   */
+  async recent(tenantId: TenantId, limit: number, since?: string): Promise<ToolCallRecord[]> {
+    const filter = since === undefined ? { tenantId } : { tenantId, startedAt: { $gt: since } };
     const docs = await this.calls
-      .find({ tenantId }, { projection: { _id: 0 } })
+      .find(filter, { projection: { _id: 0 } })
       .sort({ startedAt: -1 })
       .limit(limit)
       .toArray();
@@ -99,7 +92,7 @@ export class CallRecorder {
 }
 
 /** Nearest-rank percentile of an ascending list. Null for an empty list. */
-function percentile(sorted: number[], p: number): number | null {
+export function percentile(sorted: number[], p: number): number | null {
   if (sorted.length === 0) return null;
   const rank = Math.ceil((p / 100) * sorted.length);
   return sorted[Math.max(0, rank - 1)] ?? null;

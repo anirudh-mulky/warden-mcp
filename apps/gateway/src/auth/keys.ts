@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { ApiKeyId } from "@warden/shared";
 
 /**
  * API key material: generating keys, hashing them, and a cheap format check.
@@ -41,6 +42,11 @@ export function generateApiKey(): NewApiKey {
     prefix: key.slice(0, DISPLAY_PREFIX_LENGTH),
     hash: hashApiKey(key),
   };
+}
+
+/** A key's public identifier — safe to show and log, unlike the key itself. */
+export function newApiKeyId(): ApiKeyId {
+  return `key_${randomBytes(8).toString("hex")}` as ApiKeyId;
 }
 
 export function hashApiKey(key: string): string {

@@ -1,8 +1,8 @@
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { GetCommand, PutCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import type { ApiKeyId } from "@warden/shared";
+import type { ApiKeyId, TenantId } from "@warden/shared";
 import { dynamo, TABLES } from "../db/dynamo.js";
-import type { KeyStore, StoredApiKey } from "./store.js";
+import type { KeyAdmin, StoredApiKey } from "./store.js";
 
 /**
  * KeyStore backed by DynamoDB. The table's partition key is `hash`, so the
@@ -11,7 +11,7 @@ import type { KeyStore, StoredApiKey } from "./store.js";
  * "hash" is a DynamoDB reserved word, so expressions refer to it through the
  * placeholder "#h" instead of writing it directly.
  */
-export class DynamoKeyStore implements KeyStore {
+export class DynamoKeyStore implements KeyAdmin {
   private readonly table = TABLES.apiKeys;
 
   async findByHash(hash: string): Promise<StoredApiKey | null> {
@@ -53,11 +53,21 @@ export class DynamoKeyStore implements KeyStore {
     return keys;
   }
 
-  /** Marks a key revoked. Returns false if no such key, or it was already revoked. */
-  async revoke(id: ApiKeyId, at: string): Promise<boolean> {
+  /** One tenant's keys (Scan + filter: fine at this scale, see list()). */
+  async listByTenant(tenantId: TenantId): Promise<StoredApiKey[]> {
+    return (await this.list()).filter((k) => k.tenantId === tenantId);
+  }
+
+  /**
+   * Marks a key revoked. Returns false if no such key, it was already
+   * revoked, or — when tenantId is given — it belongs to another tenant.
+   * That last check is what stops one dashboard user revoking another's keys.
+   */
+  async revoke(id: ApiKeyId, at: string, tenantId?: TenantId): Promise<boolean> {
     // The table is keyed by hash, not id, so find the hash first (admin-only Scan).
     const key = (await this.list()).find((k) => k.id === id);
     if (key === undefined || key.revokedAt !== null) return false;
+    if (tenantId !== undefined && key.tenantId !== tenantId) return false;
 
     await dynamo.send(
       new UpdateCommand({

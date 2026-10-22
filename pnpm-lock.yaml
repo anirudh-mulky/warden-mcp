@@ -152,12 +152,21 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.5.4)
+      '@modelcontextprotocol/server-everything':
+        specifier: ^2026.8.31
+        version: 2026.8.31
+      '@modelcontextprotocol/server-filesystem':
+        specifier: ^2026.8.31
+        version: 2026.8.31(zod@4.5.4)
       '@warden/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       express:
         specifier: ^5.1.0
         version: 5.2.1
+      jose:
+        specifier: ^6.2.0
+        version: 6.2.12
       mongodb:
         specifier: ^6.10.0
         version: 6.21.0
@@ -171,12 +180,6 @@ importers:
         specifier: ^4.0.0
         version: 4.5.4
     devDependencies:
-      '@modelcontextprotocol/server-everything':
-        specifier: ^2026.8.31
-        version: 2026.8.31
-      '@modelcontextprotocol/server-filesystem':
-        specifier: ^2026.8.31
-        version: 2026.8.31(zod@4.5.4)
       '@types/express':
         specifier: ^5.0.0
         version: 5.0.6

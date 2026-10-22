@@ -1,4 +1,4 @@
-import type { ApiKey } from "@warden/shared";
+import type { ApiKey, ApiKeyId, TenantId } from "@warden/shared";
 
 /**
  * An API key as the backend stores it: the public shape plus its hash.
@@ -11,12 +11,15 @@ export interface StoredApiKey extends ApiKey {
   hash: string;
 }
 
+/** Strips the hash: the only way a stored key may leave the backend. */
+export function toPublicKey({ hash: _hash, ...publicFields }: StoredApiKey): ApiKey {
+  return publicFields;
+}
+
 /**
- * Anything that can save and find API keys.
- *
- * The middleware depends on this interface, never on a concrete store.
- * Today it gets the in-memory version; STEP 6 hands it a DynamoDB one,
- * and the middleware does not change.
+ * Anything that can save and find API keys — all the auth middleware needs.
+ * It depends on this interface, never on a concrete store, so tests hand
+ * it the in-memory version and production hands it DynamoDB.
  */
 export interface KeyStore {
   /**
@@ -32,13 +35,19 @@ export interface KeyStore {
   put(key: StoredApiKey): Promise<void>;
 }
 
+/** The extra operations the dashboard's key management needs. */
+export interface KeyAdmin extends KeyStore {
+  listByTenant(tenantId: TenantId): Promise<StoredApiKey[]>;
+  /** False if missing, already revoked, or owned by a different tenant. */
+  revoke(id: ApiKeyId, at: string, tenantId?: TenantId): Promise<boolean>;
+}
+
 /**
- * A KeyStore held in a Map. Everything is lost when the process exits.
- *
- * Good enough to build and check the middleware without Docker, and it
- * stays useful afterwards as the fake store for Day 12's tests.
+ * A key store held in a Map. Everything is lost when the process exits.
+ * Used by the tests: fast, no Docker, and it behaves like the real store —
+ * copies in and out, duplicate hashes rejected.
  */
-export class InMemoryKeyStore implements KeyStore {
+export class InMemoryKeyStore implements KeyAdmin {
   private readonly byHash = new Map<string, StoredApiKey>();
 
   async findByHash(hash: string): Promise<StoredApiKey | null> {
@@ -51,5 +60,17 @@ export class InMemoryKeyStore implements KeyStore {
       throw new Error(`A key with this hash already exists (prefix ${key.prefix})`);
     }
     this.byHash.set(key.hash, structuredClone(key));
+  }
+
+  async listByTenant(tenantId: TenantId): Promise<StoredApiKey[]> {
+    return [...this.byHash.values()].filter((k) => k.tenantId === tenantId).map((k) => structuredClone(k));
+  }
+
+  async revoke(id: ApiKeyId, at: string, tenantId?: TenantId): Promise<boolean> {
+    const key = [...this.byHash.values()].find((k) => k.id === id);
+    if (key === undefined || key.revokedAt !== null) return false;
+    if (tenantId !== undefined && key.tenantId !== tenantId) return false;
+    key.revokedAt = at;
+    return true;
   }
 }

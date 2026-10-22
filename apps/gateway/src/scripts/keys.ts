@@ -1,7 +1,6 @@
-import { randomBytes } from "node:crypto";
 import type { ApiKeyId, TenantId } from "@warden/shared";
 import { DynamoKeyStore } from "../auth/dynamo-store.js";
-import { generateApiKey } from "../auth/keys.js";
+import { generateApiKey, newApiKeyId } from "../auth/keys.js";
 
 /**
  * Admin CLI for API keys.
@@ -31,7 +30,7 @@ if (command === "create") {
   }
 
   const { key, prefix, hash } = generateApiKey();
-  const id = `key_${randomBytes(8).toString("hex")}` as ApiKeyId;
+  const id = newApiKeyId();
   await store.put({
     id,
     tenantId: tenantId as TenantId,

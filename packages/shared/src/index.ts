@@ -107,6 +107,28 @@ export interface ToolStats {
   p95Ms: number | null;
 }
 
+/** One upstream tool, and what the tenant's current policy says about it. */
+export interface ToolInfo {
+  name: string;
+  description: string;
+  /** "allow" or "deny" under the current policy (rate limits not included). */
+  verdict: "allow" | "deny";
+  /** Why it is denied. Null when allowed. */
+  reason: string | null;
+}
+
+/** The signed-in dashboard user, as returned by /api/me. Never includes the password hash. */
+export interface Me {
+  email: string;
+  tenantId: TenantId;
+}
+
+/** Response to creating a key: the full key appears here once and never again. */
+export interface CreatedApiKey {
+  key: string;
+  apiKey: ApiKey;
+}
+
 /** Shape of GET /healthz. Trivial now; it will grow dependency checks. */
 export interface HealthResponse {
   status: "ok" | "degraded";
