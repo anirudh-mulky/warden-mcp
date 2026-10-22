@@ -72,6 +72,7 @@ pnpm dashboard      # dashboard on :5173, proxies /api to the gateway
 ```
 
 Admin CLI: `pnpm keys create <tenant> <name>`, `pnpm keys list`, `pnpm keys revoke <id>`.
+Benchmark: `pnpm bench`.
 
 ## Tests
 
@@ -85,6 +86,26 @@ MCP client through deny → allow → throttle, checks the call log, revokes the
 key, and checks that one tenant can never see or touch another's data. CI
 (`.github/workflows/ci.yml`, free on public repos) runs typecheck, both suites
 and a Docker build on every push.
+
+## Performance
+
+Measured with `pnpm bench`, which times the same `everything.echo` call
+directly against the upstream and through Warden (2,000 calls each, after
+warm-up). Apple M3 Pro, Node 22, databases in local Docker, client and gateway
+on the same machine — treat these as figures for this setup, not universal ones.
+
+| Path | p50 | p95 | p99 |
+|---|---|---|---|
+| Direct to upstream (baseline) | 0.06 ms | 0.11 ms | 0.16 ms |
+| Through Warden | 3.28 ms | 5.18 ms | 6.54 ms |
+| Through Warden, rate limiting on | 5.95 ms | 9.52 ms | 13.72 ms |
+| Through Warden, 10 concurrent clients | 7.19 ms | 10.35 ms | 14.62 ms |
+
+So Warden adds about **3 ms at p50 / 5 ms at p95** per call (key lookup,
+policy check, call log), or about 6 / 9.5 ms with a rate limit, which costs one
+conditional DynamoDB write per call. Throughput with 10 concurrent clients was
+about **1,300 calls/s**. Re-run it on your machine with
+`CALLS=2000 CONCURRENCY=10 pnpm bench`.
 
 ## Design decisions
 

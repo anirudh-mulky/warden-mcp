@@ -13,6 +13,7 @@
     "dashboard": "pnpm --filter @warden/dashboard dev",
     "db:setup": "pnpm --filter @warden/gateway db:setup",
     "keys": "pnpm --filter @warden/gateway keys",
+    "bench": "pnpm --filter @warden/gateway bench",
     "test": "pnpm --filter @warden/gateway test",
     "test:integration": "pnpm --filter @warden/gateway test:integration",
     "build": "pnpm -r build",

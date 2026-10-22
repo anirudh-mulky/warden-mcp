@@ -11,7 +11,8 @@
     "test": "NODE_ENV=test LOG_LEVEL=fatal tsx --test \"src/**/*.test.ts\"",
     "test:integration": "NODE_ENV=test LOG_LEVEL=fatal tsx --env-file-if-exists=.env --test \"src/**/*.itest.ts\"",
     "db:setup": "tsx --env-file-if-exists=.env src/scripts/create-tables.ts",
-    "keys": "tsx --env-file-if-exists=.env src/scripts/keys.ts"
+    "keys": "tsx --env-file-if-exists=.env src/scripts/keys.ts",
+    "bench": "LOG_LEVEL=warn tsx --env-file-if-exists=.env src/scripts/bench.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1151.0",
