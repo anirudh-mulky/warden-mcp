@@ -81,9 +81,11 @@ export class CallRecorder {
 
     return [...byTool.entries()]
       .map(([tool, calls]) => {
-        // Latency only means something for calls that reached an upstream.
+        // Latency only means something for calls that reached an upstream —
+        // and NOT for approved calls, whose time is mostly a human deciding.
+        // Mixing those in would make a fast gateway look seconds slow.
         const latencies = calls
-          .filter((c) => c.verdict === "allow")
+          .filter((c) => c.verdict === "allow" && c.approval === undefined)
           .map((c) => c.latencyMs)
           .sort((a, b) => a - b);
         return {

@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import express, { type Express, type Request, type Response } from "express";
 // Named import, not default: pino-http is CommonJS, and under NodeNext its
 // types put the function at `.default`, so a default import type-checks as
@@ -87,7 +87,18 @@ export function buildApp(deps: AppDeps): Express {
   // fall back to index.html so the single-page app handles its own routes.
   if (env.DASHBOARD_DIR !== undefined) {
     const dir = env.DASHBOARD_DIR;
-    app.use(express.static(dir, { index: "index.html", maxAge: "1h" }));
+    // Caching: index.html must NEVER be cached — it names the current bundle,
+    // and a cached copy keeps pointing at last release's JavaScript. The
+    // bundles in /assets have a content hash in their file name, so they
+    // can be cached forever: new code means a new name.
+    app.use(
+      express.static(dir, {
+        index: "index.html",
+        setHeaders(res, filePath) {
+          res.setHeader("Cache-Control", filePath.includes(`${sep}assets${sep}`) ? "public, max-age=31536000, immutable" : "no-cache");
+        },
+      }),
+    );
     app.get(/^\/(?!mcp|api|healthz|readyz|\.well-known).*/, (req: Request, res: Response, next) => {
       // Only browsers asking for a page get the dashboard. A program asking
       // for JSON (e.g. an MCP client probing /.well-known/oauth-* after a
@@ -97,6 +108,7 @@ export function buildApp(deps: AppDeps): Express {
         next();
         return;
       }
+      res.setHeader("Cache-Control", "no-cache");
       res.sendFile(join(dir, "index.html"));
     });
   }
